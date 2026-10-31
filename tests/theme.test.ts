@@ -59,3 +59,11 @@ describe('parseWalls', () => {
     expect(parseWalls('nonsense').strokes).toEqual([]);
   });
 });
+describe('parseWalls compact format', () => {
+  it('accepts [x1,y1,x2,y2] walls and [x,y] points', () => {
+    const r = parseWalls({ walls: [[100, 50, 100, 400], [100, 400, '600', 400]], start: [60, 60], goal: [900, 920] });
+    expect(r.strokes).toEqual([[{ x: 100, y: 50 }, { x: 100, y: 400 }], [{ x: 100, y: 400 }, { x: 600, y: 400 }]]);
+    expect(r.start).toEqual({ x: 60, y: 60 });
+    expect(r.goal).toEqual({ x: 900, y: 920 });
+  });
+});
