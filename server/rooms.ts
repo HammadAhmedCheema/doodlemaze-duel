@@ -13,7 +13,7 @@ const GRACE_MS = 20_000;
 const ROOM_TTL_MS = 30 * 60_000;
 const VLM_PER_ROOM_PER_MIN = 6;
 
-type Maze = { segments: Seg[]; start: Pt; goal: Pt; stats: MazeStats; warnings: Issue<WarningCode>[] };
+type Maze = { segments: Seg[]; start: Pt; goal: Pt; stats: MazeStats; warnings: Issue<WarningCode>[]; beast: boolean };
 
 type Player = {
   id: string;
@@ -114,7 +114,7 @@ function checkMaze(ws: WebSocket, m: Extract<ClientMsg, { type: 'submit_maze' }>
     return null;
   }
   send(ws, { type: 'maze_accepted', stats: r.stats, warnings: r.warnings });
-  return { segments: r.segments, start: m.start, goal: m.goal, stats: r.stats, warnings: r.warnings };
+  return { segments: r.segments, start: m.start, goal: m.goal, stats: r.stats, warnings: r.warnings, beast: !!m.beast };
 }
 
 function startTheme(room: Room, p: Player) {
@@ -146,7 +146,7 @@ function applyTheme(room: Room, p: Player, res: { theme: Theme; source: ThemeSou
 
 function raceMazeOf(p: Player): RaceMaze {
   const m = p.maze!;
-  return { segments: m.segments, start: m.start, goal: m.goal, theme: p.theme ?? defaultTheme(m.stats.shortestUnits), shortestUnits: m.stats.shortestUnits, authorName: p.name, themeSource: p.themeSource, model: p.model };
+  return { segments: m.segments, start: m.start, goal: m.goal, theme: p.theme ?? defaultTheme(m.stats.shortestUnits), shortestUnits: m.stats.shortestUnits, authorName: p.name, themeSource: p.themeSource, model: p.model, beast: m.beast };
 }
 
 function maybeStartRace(room: Room) {

@@ -143,6 +143,7 @@ export class MazeScene {
     gl.position.set(gp.x, 1.6, gp.z);
     this.scene.add(gl);
 
+    this.segs = maze.segments;
     this.addProps(theme, maze.deadEnds ?? [], seed);
 
     if (maze.path && maze.path.length > 1) {
@@ -244,12 +245,109 @@ export class MazeScene {
     });
   }
 
+  /** Camera mode during a race: first-person, third-person chase, or a high overhead view. */
+  view: 'first' | 'third' | 'top' = 'first';
+  private avatar: THREE.Group | null = null;
+  private beast: THREE.Group | null = null;
+  private beastEyes: THREE.Object3D[] = [];
+  private segs: Seg[] = [];
+
+  private ensureAvatar() {
+    if (this.avatar) return this.avatar;
+    const g = new THREE.Group();
+    const accent = new THREE.Color(0x22d3ee);
+    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.17, 0.75, 6, 12), new THREE.MeshStandardMaterial({ color: 0xe6e9f5, emissive: accent, emissiveIntensity: 0.25, roughness: 0.4 }));
+    body.position.y = 0.6;
+    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.26), new THREE.MeshBasicMaterial({ color: accent }));
+    visor.position.set(0.14, 1.0, 0);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.3, 0.38, 32), new THREE.MeshBasicMaterial({ color: accent, side: THREE.DoubleSide, transparent: true, opacity: 0.7 }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.03;
+    g.add(body, visor, ring);
+    this.scene.add(g);
+    this.avatar = g;
+    return g;
+  }
+
+  /** Distance (logical units) a ray from (x,y) in direction (dx,dy) travels before hitting a wall line, capped at max. */
+  private rayToWall(x: number, y: number, dx: number, dy: number, max: number): number {
+    let best = max;
+    for (const s of this.segs) {
+      const ex = s.x2 - s.x1, ey = s.y2 - s.y1;
+      const den = dx * ey - dy * ex;
+      if (Math.abs(den) < 1e-9) continue;
+      const t = ((s.x1 - x) * ey - (s.y1 - y) * ex) / den;
+      const u = ((s.x1 - x) * dy - (s.y1 - y) * dx) / den;
+      if (t > 0 && t < best && u >= -0.02 && u <= 1.02) best = t;
+    }
+    return best;
+  }
+
   setPlayer(x: number, y: number, angle: number) {
     const w = toWorld({ x, y });
-    this.camera.position.set(w.x, EYE_HEIGHT_M, w.z);
-    this.camera.lookAt(w.x + Math.cos(angle), EYE_HEIGHT_M, w.z + Math.sin(angle));
+    const fx = Math.cos(angle), fz = Math.sin(angle);
+    const avatar = this.view === 'first' ? this.avatar : this.ensureAvatar();
+    if (avatar) {
+      avatar.visible = this.view !== 'first';
+      avatar.position.set(w.x, 0, w.z);
+      avatar.rotation.y = -angle;
+    }
+    if (this.view === 'first') {
+      this.camera.position.set(w.x, EYE_HEIGHT_M, w.z);
+      this.camera.lookAt(w.x + fx, EYE_HEIGHT_M, w.z + fz);
+    } else if (this.view === 'third') {
+      // boom behind the player, shortened so it never pokes through a wall
+      const want = 2.6 / S;
+      const room = this.rayToWall(x, y, -fx, -fz, want) - 12;
+      const back = Math.max(0.4 / S, room) * S;
+      this.camera.position.set(w.x - fx * back, 2.05, w.z - fz * back);
+      this.camera.lookAt(w.x + fx * 1.5, 1.0, w.z + fz * 1.5);
+    } else {
+      this.camera.position.set(w.x - fx * 3, 13, w.z - fz * 3);
+      this.camera.lookAt(w.x + fx * 1.5, 0, w.z + fz * 1.5);
+    }
     // a little behind and above the eye, so walls right next to you are lit but not blown out
-    this.playerLight.position.set(w.x - Math.cos(angle) * 1.2, EYE_HEIGHT_M + 0.9, w.z - Math.sin(angle) * 1.2);
+    this.playerLight.position.set(w.x - fx * 1.2, EYE_HEIGHT_M + 0.9, w.z - fz * 1.2);
+  }
+
+  /** The beast: a spiky shadow creature with glowing eyes and its own red light. */
+  setBeast(p: { x: number; y: number; angle: number; awake: boolean } | null) {
+    if (!p) { if (this.beast) this.beast.visible = false; return; }
+    if (!this.beast) {
+      const g = new THREE.Group();
+      const dark = new THREE.MeshStandardMaterial({ color: 0x14061f, emissive: 0x3b0a45, emissiveIntensity: 0.6, roughness: 0.6, flatShading: true });
+      const body = new THREE.Mesh(new THREE.IcosahedronGeometry(0.55, 0), dark);
+      body.position.y = 0.95;
+      g.add(body);
+      const spikeGeo = new THREE.ConeGeometry(0.09, 0.45, 6);
+      for (let i = 0; i < 14; i++) {
+        const sp = new THREE.Mesh(spikeGeo, dark);
+        const a = (i / 14) * Math.PI * 2, el = ((i % 3) - 1) * 0.6;
+        const dir = new THREE.Vector3(Math.cos(a) * Math.cos(el), Math.sin(el) + 0.2, Math.sin(a) * Math.cos(el)).normalize();
+        sp.position.copy(dir.clone().multiplyScalar(0.55)).add(new THREE.Vector3(0, 0.95, 0));
+        sp.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+        g.add(sp);
+      }
+      const eyeMat = new THREE.MeshBasicMaterial({ color: 0xff2244 });
+      for (const side of [-1, 1]) {
+        const eye = new THREE.Mesh(new THREE.SphereGeometry(0.08, 10, 8), eyeMat);
+        eye.position.set(0.48, 1.08, side * 0.17);
+        g.add(eye);
+        this.beastEyes.push(eye);
+      }
+      const light = new THREE.PointLight(0xff2244, 5, 7, 1.6);
+      light.position.set(0.6, 1.1, 0);
+      g.add(light);
+      this.scene.add(g);
+      this.beast = g;
+    }
+    const w = toWorld(p);
+    const t = performance.now() / 1000;
+    this.beast.visible = true;
+    this.beast.position.set(w.x, Math.sin(t * 6) * 0.08 + (p.awake ? 0 : -0.4), w.z);
+    this.beast.rotation.y = -p.angle;
+    this.beast.children[0].rotation.x = t * 1.5;
+    for (const e of this.beastEyes) e.visible = p.awake || Math.sin(t * 2) > 0.7;
   }
 
   private resize() {

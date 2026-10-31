@@ -8,7 +8,7 @@ const pt = z.object({ x: z.number().finite(), y: z.number().finite() });
 export const ClientMsg = z.discriminatedUnion('type', [
   z.object({ type: z.literal('create_room'), name: z.string().max(24), buildTimeS: z.number().int().min(0).max(900).optional() }),
   z.object({ type: z.literal('join_room'), code: z.string().max(8), name: z.string().max(24), token: z.string().max(64).optional() }),
-  z.object({ type: z.literal('submit_maze'), strokes: z.array(z.array(pt)).max(400), start: pt, goal: pt }),
+  z.object({ type: z.literal('submit_maze'), strokes: z.array(z.array(pt)).max(400), start: pt, goal: pt, beast: z.boolean().optional() }),
   z.object({ type: z.literal('skip_theme') }),
   z.object({ type: z.literal('ready') }),
   z.object({ type: z.literal('progress'), p: z.number().min(0).max(1) }),
@@ -32,7 +32,7 @@ export type PlayerView = {
   progress: number;
 };
 
-export type RaceMaze = { segments: Seg[]; start: Pt; goal: Pt; theme: Theme; shortestUnits: number; authorName: string; themeSource: ThemeSource; model?: string };
+export type RaceMaze = { segments: Seg[]; start: Pt; goal: Pt; theme: Theme; shortestUnits: number; authorName: string; themeSource: ThemeSource; model?: string; beast?: boolean };
 
 export type ResultPlayer = { id: string; name: string; elapsedMs: number | null; pace: number | null; maze: RaceMaze | null; finished: boolean };
 

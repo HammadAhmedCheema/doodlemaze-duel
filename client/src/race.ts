@@ -1,5 +1,6 @@
 import { FINISH_RADIUS, GRID, CELL } from '../../shared/constants';
-import { validateSegments } from '../../shared/geometry';
+import { validateSegments, distanceField, cellOf } from '../../shared/geometry';
+import { Beast, BEAST_CATCH, pickLair } from './game/beast';
 import type { Theme } from '../../shared/theme';
 import type { Pt, Seg } from '../../shared/types';
 import { Controls, Physics } from './game/physics';
@@ -8,7 +9,8 @@ import { h, fmtTime, debugMode } from './ui';
 import { sfx } from './sound';
 
 export type RaceOpts = {
-  maze: { segments: Seg[]; start: Pt; goal: Pt; theme: Theme; authorName?: string };
+  maze: { segments: Seg[]; start: Pt; goal: Pt; theme: Theme; authorName?: string; beast?: boolean };
+  allowTopView?: boolean;
   opponentName?: string;
   startAt?: number; // local performance-clock ms when control starts; default: 3.5 s from now
   onProgress?: (p: number) => void;
@@ -30,6 +32,11 @@ export class Race {
   private stopped = false;
   private lastSent = 0;
   private lastCount = -1;
+  private beast: Beast | null = null;
+  private catches = 0;
+  private lastGrowl = 0;
+  private vignette: HTMLElement;
+  private viewLabel: HTMLElement;
   private ui: {
     clock: HTMLElement; me: HTMLElement; mePct: HTMLElement; opp?: HTMLElement; oppPct?: HTMLElement;
     center: HTMLElement; debug: HTMLElement; toast: HTMLElement;
@@ -50,6 +57,21 @@ export class Race {
     this.physics = new Physics(m.segments, { x: m.start.x, y: m.start.y, angle });
     this.controls = new Controls(this.el);
     this.startAt = opts.startAt ?? performance.now() + 3500;
+    if (m.beast) {
+      const lair = pickLair(v.deadEndPts, distanceField(v.grid, cellOf(m.start)), m.start, m.goal);
+      this.beast = new Beast(v.grid, lair, this.startAt);
+    }
+    this.vignette = h('div', { class: 'vignette' });
+    this.viewLabel = h('span', {}, 'first-person');
+    const views: Array<'first' | 'third' | 'top'> = opts.allowTopView ? ['first', 'third', 'top'] : ['first', 'third'];
+    const cycle = () => {
+      this.scene.view = views[(views.indexOf(this.scene.view) + 1) % views.length];
+      this.viewLabel.textContent = { first: 'first-person', third: 'third-person', top: 'overhead' }[this.scene.view];
+    };
+    const onV = (e: KeyboardEvent) => { if (e.key.toLowerCase() === 'v') cycle(); };
+    window.addEventListener('keydown', onV);
+    this.viewCleanup = () => window.removeEventListener('keydown', onV);
+    this.cycleView = cycle;
 
     const clock = h('div', { class: 'clock' }, '0:00.00');
     const me = h('div');
@@ -71,11 +93,14 @@ export class Race {
       h('div', { class: 'pane', style: { textAlign: 'right' } },
         h('div', { style: { fontWeight: '800' } }, m.theme.themeName),
         h('div', { class: 'muted', style: { fontSize: '12px' } }, `${m.theme.mood} · ${m.theme.difficulty} ${m.theme.difficultyScore}/10${m.authorName ? ` · by ${m.authorName}` : ''}`)),
-      h('button', { class: 'small', onclick: () => opts.onLeave?.() }, 'Leave'),
+      h('div', { class: 'row', style: { gap: '8px' } },
+        h('button', { class: 'small', title: 'Switch camera (V)', onclick: () => this.cycleView() }, '🎥 ', this.viewLabel),
+        h('button', { class: 'small', onclick: () => opts.onLeave?.() }, 'Leave')),
+      m.beast ? h('div', { class: 'pane beast-pane' }, '👹 A beast hunts this maze') : '',
     );
     const bl = h('div', { class: 'bl' }, h('div', { class: 'pane muted', style: { fontSize: '12px' } },
-      h('span', { class: 'kbd' }, 'W/S'), ' move  ', h('span', { class: 'kbd' }, 'A/D'), ' turn  ', h('span', { class: 'kbd' }, 'Q/E'), ' strafe  · click for mouse look'), debug);
-    this.el.append(h('div', { class: 'hud' }, tl, tr, bl, h('div', { class: 'crosshair' }), toast), center);
+      h('span', { class: 'kbd' }, 'W/S'), ' move  ', h('span', { class: 'kbd' }, 'A/D'), ' turn  ', h('span', { class: 'kbd' }, 'Q/E'), ' strafe  ', h('span', { class: 'kbd' }, 'V'), ' camera  · click for mouse look'), debug);
+    this.el.append(this.vignette, h('div', { class: 'hud' }, tl, tr, bl, h('div', { class: 'crosshair' }), toast), center);
     this.ui = { clock, me, mePct, opp, oppPct, center, debug, toast };
 
     this.scene.onFrame = (dt, now) => this.frame(dt, now);
@@ -105,6 +130,8 @@ export class Race {
   }
   private introEl: HTMLElement | null = null;
   private debugCleanup?: () => void;
+  private viewCleanup?: () => void;
+  private cycleView: () => void = () => {};
 
   private frame(dt: number, now: number) {
     if (this.stopped) return;
@@ -117,6 +144,7 @@ export class Race {
         if (n <= 3) sfx.beep(440, 0.12);
       }
       this.scene.setPlayer(this.physics.state.x, this.physics.state.y, this.physics.state.angle);
+      if (this.beast) this.scene.setBeast({ x: this.beast.x, y: this.beast.y, angle: this.beast.angle, awake: false });
       return;
     }
     if (this.lastCount !== 0) {
@@ -135,6 +163,7 @@ export class Race {
       const d = this.dist[cy * GRID + cx];
       if (Number.isFinite(d)) this.progress = Math.max(0, Math.min(1, 1 - d / this.startDist));
       const elapsed = now - this.startAt;
+      if (this.beast) this.updateBeast(dt, now);
       this.ui.clock.textContent = fmtTime(elapsed);
       this.ui.me.style.width = `${Math.round(this.progress * 100)}%`;
       this.ui.mePct.textContent = `${Math.round(this.progress * 100)}%`;
@@ -156,6 +185,37 @@ export class Race {
     if (debugMode) this.ui.debug.textContent = `fps ${this.scene.fps} · x ${this.physics.state.x.toFixed(0)} y ${this.physics.state.y.toFixed(0)} · p ${(this.progress * 100).toFixed(1)}%`;
   }
 
+  private updateBeast(dt: number, now: number) {
+    const b = this.beast!;
+    const s = this.physics.state;
+    const wasAwake = b.awake;
+    const d = b.update(dt, now, s);
+    this.scene.setBeast({ x: b.x, y: b.y, angle: b.angle, awake: b.awake });
+    if (!wasAwake && b.awake && this.catches === 0 && now - this.startAt < 6000) this.flashToast('👹 The beast is awake!', 1800);
+    // fear: red vignette and growls as it gets close
+    const fear = b.awake ? Math.max(0, Math.min(1, 1 - (d - 40) / 260)) : 0;
+    this.vignette.style.opacity = String(fear * 0.85);
+    if (fear > 0.25 && now - this.lastGrowl > 1400 - fear * 900) {
+      this.lastGrowl = now;
+      sfx.growl(fear);
+    }
+    if (b.awake && d < BEAST_CATCH) {
+      this.catches++;
+      sfx.lose();
+      Object.assign(s, { x: this.opts.maze.start.x, y: this.opts.maze.start.y });
+      this.progress = 0;
+      b.reset(now, 3000);
+      this.flashToast(`👹 Caught! Back to the start (${this.catches}×)`, 2200);
+    }
+  }
+
+  private toastTimer = 0;
+  private flashToast(msg: string, ms: number) {
+    this.toast(msg);
+    clearTimeout(this.toastTimer);
+    this.toastTimer = window.setTimeout(() => (this.ui.toast.style.display = 'none'), ms);
+  }
+
   stop() {
     this.stopped = true;
     this.controls.enabled = false;
@@ -163,6 +223,8 @@ export class Race {
 
   dispose() {
     this.debugCleanup?.();
+    this.viewCleanup?.();
+    clearTimeout(this.toastTimer);
     this.stop();
     this.controls.destroy();
     this.scene.dispose();

@@ -32,6 +32,7 @@ const app = {
   myTheme: null as { theme: Theme; source: ThemeSource; model?: string } | null,
   myStats: null as ValidationResult['stats'] | null,
   raceMaze: null as RaceMaze | null,
+  beast: safeGet(localStorage, 'dmd.beast') === '1',
   screen: '' as string,
   cleanup: [] as Array<() => void>,
   onMsg: null as ((m: ServerMsg) => void) | null,
@@ -237,6 +238,13 @@ function lobbyScreen() {
   app.onMsg = (m) => { if (m.type === 'room_state') renderPlayers(); };
 }
 
+function beastSwitch(label = '👹 Add a beast that hunts the racer') {
+  const box = h('input', { type: 'checkbox', checked: app.beast }) as HTMLInputElement;
+  const el = h('label', { class: `switch ${app.beast ? 'on' : ''}`, title: 'A shadow beast wakes up 4 s into the race and chases the player. If it catches them, they go back to the start.' }, box, h('span', {}, label));
+  box.onchange = () => { app.beast = box.checked; el.classList.toggle('on', box.checked); safeSet(localStorage, 'dmd.beast', box.checked ? '1' : '0'); };
+  return el;
+}
+
 // ---------------------------------------------------------------- solo picker
 function soloScreen() {
   app.mode = 'solo';
@@ -246,7 +254,7 @@ function soloScreen() {
     drawMaze(c, v.segments, s.start, s.goal, { size: 220 });
     return h('div', { class: 'sample', onclick: () => {
       const theme = { ...defaultTheme(v.stats.shortestUnits), refereeComment: 'A bundled practice maze.' };
-      raceScreen({ segments: v.segments, start: s.start, goal: s.goal, theme, shortestUnits: v.stats.shortestUnits, authorName: 'DoodleMaze', themeSource: 'default' });
+      raceScreen({ segments: v.segments, start: s.start, goal: s.goal, theme, shortestUnits: v.stats.shortestUnits, authorName: 'DoodleMaze', themeSource: 'default', beast: app.beast });
     } }, c, s.name);
   });
   const el = h('div', {},
@@ -254,6 +262,7 @@ function soloScreen() {
       h('h2', {}, 'Solo practice'),
       h('p', { class: 'sub' }, 'Run a bundled maze, or draw your own and let the AI referee theme it.'),
       h('div', { class: 'samples' }, ...cards),
+      h('div', { style: { height: '12px' } }), beastSwitch('👹 Beast mode: something hunts you in the maze'),
       h('div', { class: 'row', style: { marginTop: '16px' } },
         h('button', { class: 'primary', onclick: () => { app.myMaze = null; app.myTheme = null; drawScreen(); } }, '✎ Draw my own'),
         h('button', { class: 'ghost', onclick: goHome }, 'Back'))),
@@ -297,7 +306,7 @@ function drawScreen() {
     app.myTheme = null;
     sfx.click();
     ensureNet();
-    net.send({ type: 'submit_maze', ...app.myMaze });
+    net.send({ type: 'submit_maze', ...app.myMaze, beast: app.beast });
     themeScreen(board.validation);
   };
   submit.onclick = doSubmit;
@@ -308,6 +317,7 @@ function drawScreen() {
       h('p', { class: 'sub', style: { marginBottom: '12px', fontSize: '14px' } }, 'Walls are drawn at real thickness. Small gaps get closed automatically, and the outer border is added for you.'),
       board.toolbar(), h('div', { style: { height: '8px' } }), board.toggles()),
     status,
+    beastSwitch(duel ? '👹 Add a beast to hunt my opponent' : undefined),
     duel ? h('div', { class: 'stack', style: { gap: '6px' } }, h('div', { class: 'row', style: { justifyContent: 'space-between' } }, h('span', { class: 'muted' }, 'Build timer'), timerText), timerBar) : '',
     submit,
     h('div', { class: 'row' },
@@ -410,7 +420,7 @@ function themeScreen(v: ValidationResult) {
       if (autoReady) { autoReady = false; ready.click(); }
     } else {
       actions.replaceChildren(
-        h('button', { class: 'primary grow', onclick: () => raceScreen({ segments: v.segments, start: app.myMaze!.start, goal: app.myMaze!.goal, theme: th, shortestUnits: v.stats.shortestUnits, authorName: app.name || 'You', themeSource: t.source, model: t.model }) }, 'Play it in 3D →'),
+        h('button', { class: 'primary grow', onclick: () => raceScreen({ segments: v.segments, start: app.myMaze!.start, goal: app.myMaze!.goal, theme: th, shortestUnits: v.stats.shortestUnits, authorName: app.name || 'You', themeSource: t.source, model: t.model, beast: app.beast }) }, 'Play it in 3D →'),
         h('button', { class: 'ghost', onclick: drawScreen }, '← Edit maze'),
       );
     }
@@ -451,6 +461,7 @@ function raceScreen(maze: RaceMaze, startAt?: number) {
     race = new Race({
       maze,
       opponentName: duel ? opp?.name ?? 'Opponent' : undefined,
+      allowTopView: !duel,
       startAt,
       onProgress: (p) => { if (duel) net.send({ type: 'progress', p }); },
       onFinish: (ms) => {
@@ -508,6 +519,7 @@ function resultScreen(winnerId: string | null, reason: 'finish' | 'forfeit', pla
       h('div', { class: 'stat' }, h('span', {}, 'Time'), h('b', {}, p.elapsedMs !== null ? fmtTime(p.elapsedMs) : 'did not finish')),
       h('div', { class: 'stat' }, h('span', {}, 'Pace (ms/unit)'), h('b', {}, p.pace !== null ? p.pace.toFixed(2) : '–')),
       p.maze ? h('div', { class: 'stat' }, h('span', {}, `Played ${p.maze.authorName}'s maze`), h('b', {}, p.maze.theme.themeName)) : '',
+      p.maze?.beast ? h('div', { class: 'stat' }, h('span', {}, 'Hazard'), h('b', { style: { color: 'var(--bad)' } }, '👹 beast')) : '',
       p.maze ? h('div', { class: 'stat' }, h('span', {}, 'Referee difficulty'), h('b', { class: `diff ${p.maze.theme.difficulty}` }, `${p.maze.theme.difficulty} ${p.maze.theme.difficultyScore}/10`)) : '',
       p.maze?.theme.refereeComment ? h('div', { class: 'comment', style: { fontSize: '14px', margin: '10px 0' } }, `“${p.maze.theme.refereeComment}”`) : '',
       p.maze ? h('div', { style: { marginTop: '10px' } }, revealCanvas(p.maze)) : ''),
