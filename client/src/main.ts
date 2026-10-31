@@ -11,6 +11,7 @@ import { Net } from './net';
 import { Race } from './race';
 import { MazeScene } from './render3d/scene';
 import { drawMaze } from './reveal';
+import { loadSquare, traceWalls, straighten, doodleImage, autoPlace } from './trace';
 import { sfx } from './sound';
 import { debugMode, fmtTime, h } from './ui';
 
@@ -311,12 +312,74 @@ function drawScreen() {
   };
   submit.onclick = doSubmit;
 
+  // ---- AI tools: photo -> maze, doodle clean-up. The AI only proposes walls; the validator still decides. ----
+  const aiStatus = h('div', { class: 'muted', style: { fontSize: '13px', minHeight: '18px' } });
+  const fileIn = h('input', { type: 'file', accept: 'image/*', style: { display: 'none' } }) as HTMLInputElement;
+  let pendingFallback: (() => void) | null = null;
+  const setBusy = (msg: string | null) => {
+    aiStatus.replaceChildren(...(msg ? [h('span', { class: 'spinner', style: { width: '12px', height: '12px', borderWidth: '2px', verticalAlign: 'middle', marginRight: '6px' } }), msg] : []));
+    for (const b of [photoBtn, cleanBtn]) b.disabled = !!msg;
+  };
+  const describe = (n: number, by: string) => `${by} built ${n} wall${n === 1 ? '' : 's'}. Check the result, fix anything by hand, or Undo to go back.`;
+  const applyPhoto = (strokes: MazeInput['strokes'], start: MazeInput['start'] | null, goal: MazeInput['goal'] | null, by: string) => {
+    let auto = false;
+    if (!start || !goal) {
+      const a = autoPlace(strokes);
+      if (a) { start = start ?? a.start; goal = goal ?? a.goal; auto = true; }
+    }
+    board.applyProposal(strokes, start, goal);
+    aiStatus.textContent = describe(strokes.length, by) + (auto ? ' Start and Goal were placed automatically: drag them if you like.' : '');
+  };
+  const photoBtn = h('button', { class: 'small', onclick: () => fileIn.click() }, '🖼 Maze from a photo') as HTMLButtonElement;
+  const cleanBtn = h('button', { class: 'small', onclick: () => {
+    const r = board.raw;
+    if (!r.strokes.length) { flash('Draw something first, then let the AI clean it up.'); return; }
+    pendingFallback = () => { board.applyProposal(straighten(r.strokes), null, null); aiStatus.textContent = 'Straightened with the built-in cleaner. Undo to go back.'; };
+    if (app.mock) { pendingFallback(); pendingFallback = null; return; }
+    setBusy(`${app.model} is redrawing your walls…`);
+    const hint = 'Current walls after our own clean-up (x1,y1,x2,y2): ' + JSON.stringify((board.validation?.segments ?? []).slice(0, 300).map((q) => [q.x1, q.y1, q.x2, q.y2].map(Math.round)));
+    ensureNet();
+    net.send({ type: 'ai_walls', mode: 'clean', image: doodleImage(r.strokes, r.start, r.goal), hint });
+  } }, '✨ AI clean-up') as HTMLButtonElement;
+  const straightBtn = h('button', { class: 'small ghost', title: 'Square up lines without AI', onclick: () => { const r = board.raw; if (r.strokes.length) { board.applyProposal(straighten(r.strokes), null, null); aiStatus.textContent = 'Straightened. Undo to go back.'; } } }, '📐 Straighten');
+  fileIn.onchange = async () => {
+    const f = fileIn.files?.[0];
+    fileIn.value = '';
+    if (!f) return;
+    try {
+      const sq = await loadSquare(f);
+      const traced = traceWalls(sq);
+      pendingFallback = () => { applyPhoto(traced.strokes, traced.start, traced.goal, 'The built-in tracer'); };
+      if (app.mock) { pendingFallback(); pendingFallback = null; return; }
+      setBusy(`${app.model} is reading your maze picture…`);
+      ensureNet();
+      net.send({ type: 'ai_walls', mode: 'photo', image: sq.toDataURL('image/jpeg', 0.82) });
+    } catch (e) { flash((e as Error).message); }
+  };
+  const unsub = net.on((m) => {
+    if (m.type !== 'ai_walls_result') return;
+    setBusy(null);
+    if (m.ok && m.strokes.length >= 3) {
+      if (m.mode === 'photo') applyPhoto(m.strokes, m.start, m.goal, m.model);
+      else { board.applyProposal(m.strokes, m.start, m.goal); aiStatus.textContent = describe(m.strokes.length, m.model); }
+      sfx.click();
+    } else {
+      if (!m.ok) flash(m.reason);
+      pendingFallback?.();
+    }
+    pendingFallback = null;
+  });
+  const aiCard = h('div', { class: 'card', style: { padding: '14px' } },
+    h('div', { style: { fontWeight: '800', marginBottom: '8px' } }, 'AI assist'),
+    h('div', { class: 'toolbar' }, cleanBtn, photoBtn, straightBtn), fileIn, h('div', { style: { height: '6px' } }), aiStatus);
+
   const side = h('div', { class: 'stack' },
     h('div', { class: 'card', style: { padding: '16px' } },
       h('h3', {}, duel ? 'Draw a maze for your opponent' : 'Draw your maze'),
       h('p', { class: 'sub', style: { marginBottom: '12px', fontSize: '14px' } }, 'Walls are drawn at real thickness. Small gaps get closed automatically, and the outer border is added for you.'),
       board.toolbar(), h('div', { style: { height: '8px' } }), board.toggles()),
     status,
+    aiCard,
     beastSwitch(duel ? '👹 Add a beast to hunt my opponent' : undefined),
     duel ? h('div', { class: 'stack', style: { gap: '6px' } }, h('div', { class: 'row', style: { justifyContent: 'space-between' } }, h('span', { class: 'muted' }, 'Build timer'), timerText), timerBar) : '',
     submit,
@@ -329,7 +392,7 @@ function drawScreen() {
   const el = h('div', {}, h('div', { class: 'draw-layout', style: { gridTemplateColumns: 'minmax(0, 1fr) 340px' } }, canvasCol, side));
   show('draw', el, duel ? `Build · ${app.code}` : 'Solo · Draw');
   board.mount();
-  app.cleanup.push(() => board.destroy());
+  app.cleanup.push(() => board.destroy(), () => unsub());
   if (app.myMaze) board.runValidation();
 
   if (duel) {

@@ -6,6 +6,7 @@ import { ClientMsg, type BuildState, type Phase, type PlayerView, type RaceMaze,
 import { defaultTheme, type Theme } from '../shared/theme';
 import type { Pt, Seg } from '../shared/types';
 import { requestTheme, vlmConfig } from './vlm';
+import { requestWalls } from './vlm/walls';
 
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // no I, O
 const MAX_ROOMS = 20;
@@ -46,7 +47,7 @@ type Room = {
 };
 
 /** Per-connection context. Players outside a room can still validate + theme a maze (solo practice). */
-type Conn = { ws: WebSocket; room: Room | null; player: Player | null; soloAbort: AbortController | null; soloCalls: number[] };
+type Conn = { ws: WebSocket; room: Room | null; player: Player | null; soloAbort: AbortController | null; soloCalls: number[]; wallsBusy?: boolean };
 
 const rooms = new Map<string, Room>();
 const id = () => randomBytes(6).toString('hex');
@@ -288,6 +289,20 @@ function onMessage(c: Conn, m: ClientMsg) {
     welcome(room, p);
     if (room.players.length === 2 && room.phase === 'LOBBY') resetForBuild(room);
     return broadcastState(room);
+  }
+
+  // ---- AI wall extraction (photo upload / doodle clean-up), allowed in and out of rooms ----
+  if (m.type === 'ai_walls') {
+    const cfg = vlmConfig();
+    if (cfg.mock) return send(ws, { type: 'ai_walls_result', ok: false, mode: m.mode, reason: 'The AI referee is offline (mock mode), so this used the built-in tracer instead.' });
+    if (c.wallsBusy) return send(ws, { type: 'ai_walls_result', ok: false, mode: m.mode, reason: 'Still working on your last request.' });
+    if (!canCallVlm(c.room ? c.room.vlmCalls : c.soloCalls)) return send(ws, { type: 'ai_walls_result', ok: false, mode: m.mode, reason: 'Too many AI requests this minute. Try again shortly.' });
+    c.wallsBusy = true;
+    requestWalls(m.mode, m.image, m.hint ?? '', cfg)
+      .then((r) => send(ws, { type: 'ai_walls_result', ok: true, mode: m.mode, ...r }))
+      .catch((e) => { console.warn('[vlm] walls failed:', (e as Error).message); send(ws, { type: 'ai_walls_result', ok: false, mode: m.mode, reason: 'The AI could not read that picture, so this used the built-in tracer instead.' }); })
+      .finally(() => { c.wallsBusy = false; });
+    return;
   }
 
   // ---- solo practice: validate + theme without a room ----

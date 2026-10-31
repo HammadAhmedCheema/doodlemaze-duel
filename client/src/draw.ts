@@ -94,6 +94,19 @@ export class DrawBoard {
     for (const [k, b] of this.toolButtons) b.classList.toggle('on', k === t);
   }
 
+  /** Replace the drawing with a proposal (AI or tracer). Undo brings the old drawing back. Null start/goal keeps the current ones. */
+  applyProposal(strokes: Stroke[], start: Pt | null, goal: Pt | null) {
+    this.pushHistory();
+    this.strokes = strokes.map((s) => s.map((p) => ({ ...p })));
+    if (start) this.start = { ...start };
+    if (goal) this.goal = { ...goal };
+    this.changed();
+  }
+
+  get raw() {
+    return { strokes: this.strokes, start: this.start, goal: this.goal };
+  }
+
   getInput(): MazeInput | null {
     if (!this.start || !this.goal) return null;
     return { strokes: this.strokes, start: this.start, goal: this.goal };

@@ -48,3 +48,14 @@ describe('maze png', () => {
     expect(buf.readUInt32BE(16)).toBe(600);
   });
 });
+
+import { parseWalls } from '../server/vlm/walls';
+describe('parseWalls', () => {
+  it('turns model walls into clamped 2-point strokes and drops junk', () => {
+    const r = parseWalls({ walls: [{ x1: 0, y1: 100, x2: 1200, y2: 100 }, { x1: 5, y1: 5, x2: 6, y2: 6 }, { x1: 'a' }, { x1: 300, y1: 0, x2: 300, y2: 500 }], start: { x: 50, y: 50 }, goal: null });
+    expect(r.strokes).toEqual([[{ x: 0, y: 100 }, { x: 1000, y: 100 }], [{ x: 300, y: 0 }, { x: 300, y: 500 }]]);
+    expect(r.start).toEqual({ x: 50, y: 50 });
+    expect(r.goal).toBeNull();
+    expect(parseWalls('nonsense').strokes).toEqual([]);
+  });
+});

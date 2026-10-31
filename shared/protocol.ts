@@ -10,6 +10,7 @@ export const ClientMsg = z.discriminatedUnion('type', [
   z.object({ type: z.literal('join_room'), code: z.string().max(8), name: z.string().max(24), token: z.string().max(64).optional() }),
   z.object({ type: z.literal('submit_maze'), strokes: z.array(z.array(pt)).max(400), start: pt, goal: pt, beast: z.boolean().optional() }),
   z.object({ type: z.literal('skip_theme') }),
+  z.object({ type: z.literal('ai_walls'), mode: z.enum(['photo', 'clean']), image: z.string().max(900_000).startsWith('data:image/'), hint: z.string().max(20_000).optional() }),
   z.object({ type: z.literal('ready') }),
   z.object({ type: z.literal('progress'), p: z.number().min(0).max(1) }),
   z.object({ type: z.literal('finish'), elapsedMs: z.number().min(0) }),
@@ -48,5 +49,7 @@ export type ServerMsg =
   | { type: 'opponent_progress'; p: number }
   | { type: 'opponent_finished'; name: string }
   | { type: 'race_result'; winnerId: string | null; reason: 'finish' | 'forfeit'; players: ResultPlayer[] }
+  | { type: 'ai_walls_result'; ok: true; mode: 'photo' | 'clean'; strokes: Pt[][]; start: Pt | null; goal: Pt | null; model: string }
+  | { type: 'ai_walls_result'; ok: false; mode: 'photo' | 'clean'; reason: string }
   | { type: 'pong'; t: number; serverNow: number }
   | { type: 'error'; code: string; message: string };
