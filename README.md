@@ -6,7 +6,7 @@
 
 Two players on the same Wi-Fi each doodle a maze freehand. Our geometry engine cleans the doodle into precise walls and proves it can be solved. An open-weight vision-language model (Qwen3-VL via OpenRouter) looks at the maze, rates its difficulty, writes a cheeky referee comment and picks a theme: materials, palette, lighting mood, fog and props. Three.js builds the themed 3D maze, the players swap, a synced 3-2-1 countdown starts, and the first one to find the glowing goal wins.
 
-| Draw (live validation) | AI referee theme card | Result with shortest paths |
+| Draw (live validation, cleaned walls, debug path) | AI referee theme card + 3D preview | Result with shortest paths |
 |---|---|---|
 | ![Draw](docs/draw.png) | ![Theme](docs/theme.png) | ![Result](docs/result.png) |
 

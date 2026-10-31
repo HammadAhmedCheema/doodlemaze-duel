@@ -79,6 +79,13 @@ export class Race {
     this.ui = { clock, me, mePct, opp, oppPct, center, debug, toast };
 
     this.scene.onFrame = (dt, now) => this.frame(dt, now);
+    if (debugMode) {
+      // debug-only shortcut for testing and screenshots: T jumps next to the goal (the server still enforces the speed check)
+      const near = path[Math.max(0, path.length - 3)];
+      const onKey = (e: KeyboardEvent) => { if (e.key === 't' && near) Object.assign(this.physics.state, { x: near.x, y: near.y }); };
+      window.addEventListener('keydown', onKey);
+      this.debugCleanup = () => window.removeEventListener('keydown', onKey);
+    }
   }
 
   setOpponentProgress(p: number) {
@@ -97,6 +104,7 @@ export class Race {
     this.introEl = h('div', { class: 'intro' }, h('div', { class: 'muted', style: { fontSize: '12px', letterSpacing: '.14em', textTransform: 'uppercase' } }, 'Entering'), h('div', { style: { fontSize: '30px', fontWeight: '900' } }, title), h('div', { class: 'muted' }, sub));
   }
   private introEl: HTMLElement | null = null;
+  private debugCleanup?: () => void;
 
   private frame(dt: number, now: number) {
     if (this.stopped) return;
@@ -154,6 +162,7 @@ export class Race {
   }
 
   dispose() {
+    this.debugCleanup?.();
     this.stop();
     this.controls.destroy();
     this.scene.dispose();
