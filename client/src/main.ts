@@ -371,9 +371,11 @@ function drawScreen() {
       else { board.applyProposal(m.strokes, m.start, m.goal); aiStatus.textContent = describe(m.strokes.length, m.model); }
       sfx.click();
     } else {
-      if (!m.ok) flash(m.reason);
-      else flash('The AI found too few walls, so the built-in tracer was used instead.');
-      pendingFallback?.();
+      // Not an error for the player: the built-in tracer/cleaner still builds the maze. Show a calm note
+      // under the AI buttons instead of the red banner.
+      const why = !m.ok ? m.reason : 'The AI found too few walls, so the built-in tracer was used instead.';
+      if (pendingFallback) { pendingFallback(); aiStatus.textContent = `${aiStatus.textContent} (${why.replace(/\.$/, '')}.)`; }
+      else flash(why);
     }
     pendingFallback = null;
   });
