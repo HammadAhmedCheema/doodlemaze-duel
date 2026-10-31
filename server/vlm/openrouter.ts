@@ -110,14 +110,16 @@ export async function callOpenRouter(req: ThemeRequest, cfg: Cfg, outer?: AbortS
       },
     ],
   };
-  const deadline = Date.now() + 15_000;
+  // per-attempt timeout and total cap; override with VLM_TIMEOUT_MS in .env if your provider is slow
+  const perTry = Number(process.env.VLM_TIMEOUT_MS) || VLM_TIMEOUT_MS;
+  const deadline = Date.now() + perTry + 3_000;
   const ladder = formatLadder(cfg.model);
   let step = 0;
   let retried = false;
 
   for (;;) {
     const t0 = Date.now();
-    const budget = Math.min(VLM_TIMEOUT_MS, deadline - t0);
+    const budget = Math.min(perTry, deadline - t0);
     if (budget < 1500) throw new Error('VLM time budget exhausted');
     const signals = [AbortSignal.timeout(budget)];
     if (outer) signals.push(outer);
