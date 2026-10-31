@@ -15,6 +15,16 @@ export const vlmConfig = () => ({
   fallbacks: (process.env.OPENROUTER_FALLBACK_MODELS || 'qwen/qwen3-vl-235b-a22b-instruct').split(',').map((s) => s.trim()).filter(Boolean),
 });
 
+/**
+ * Wall tracing (photo -> maze, AI clean-up) needs precise coordinates, which the Qwen-VL family is trained
+ * for (grounding). Themes stay on OPENROUTER_MODEL (Gemma). The theme models are kept as fallbacks.
+ */
+export const wallsConfig = () => {
+  const c = vlmConfig();
+  const model = process.env.OPENROUTER_WALLS_MODEL || 'qwen/qwen3-vl-235b-a22b-instruct';
+  return { model, fallbacks: [c.model, ...c.fallbacks].filter((m, i, a) => m !== model && a.indexOf(m) === i) };
+};
+
 const cache = new Map<string, ThemeResult>();
 
 export function mazeHash(r: Pick<ThemeRequest, 'segments' | 'start' | 'goal'>) {

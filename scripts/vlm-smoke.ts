@@ -14,7 +14,7 @@ process.env.VLM_TIMEOUT_MS = String(Math.max(40000, Number(process.env.VLM_TIMEO
 const { validate } = await import('../shared/geometry');
 const { SAMPLES } = await import('../shared/samples');
 const { callOpenRouter } = await import('../server/vlm/openrouter');
-const { vlmConfig } = await import('../server/vlm');
+const { vlmConfig, wallsConfig } = await import('../server/vlm');
 const { requestWalls } = await import('../server/vlm/walls');
 const { renderMazePng } = await import('../server/vlm/png');
 
@@ -26,6 +26,7 @@ if (!process.env.OPENROUTER_API_KEY) {
 const cfg = vlmConfig();
 console.log(`  OPENROUTER_MODEL           = ${cfg.model}${process.env.OPENROUTER_MODEL ? '' : '  (not set in .env, using the default)'}`);
 console.log(`  OPENROUTER_FALLBACK_MODELS = ${cfg.fallbacks.join(', ')}${process.env.OPENROUTER_FALLBACK_MODELS ? '' : '  (default)'}`);
+console.log(`  OPENROUTER_WALLS_MODEL     = ${wallsConfig().model}${process.env.OPENROUTER_WALLS_MODEL ? '' : '  (default)'}`);
 console.log(`  MOCK_VLM                   = ${process.env.MOCK_VLM ?? '(unset)'}${process.env.MOCK_VLM === '1' ? '  <- the GAME will use the mock referee; set MOCK_VLM=0' : ''}`);
 console.log(`  timeout per try            = ${process.env.VLM_TIMEOUT_MS} ms\n`);
 
@@ -35,7 +36,7 @@ try {
     const m = SAMPLES[1];
     const img = 'data:image/png;base64,' + renderMazePng(validate(m).segments, m.start, m.goal).toString('base64');
     console.log(`Asking for the walls of "${m.name}" (the real maze has about 20 wall pieces)…`);
-    const r = await requestWalls('photo', img, '', cfg);
+    const r = await requestWalls('photo', img, '', wallsConfig());
     console.log(`\nOK: ${r.model} found ${r.strokes.length} walls in ${Date.now() - t0} ms, start ${JSON.stringify(r.start)}, goal ${JSON.stringify(r.goal)}`);
     console.log(JSON.stringify(r.strokes.slice(0, 8)));
   } else {

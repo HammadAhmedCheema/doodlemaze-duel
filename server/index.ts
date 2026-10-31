@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { handleConnection } from './rooms';
-import { vlmConfig } from './vlm';
+import { vlmConfig, wallsConfig } from './vlm';
 import { checkConfiguredModels } from './vlm/models';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -45,6 +45,6 @@ server.listen(PORT, '0.0.0.0', () => {
   for (const ifs of Object.values(os.networkInterfaces())) {
     for (const i of ifs ?? []) if (i.family === 'IPv4' && !i.internal) console.log(`  LAN:    http://${i.address}:${PORT}   <- open this on the second device`);
   }
-  console.log(c.mock ? '  VLM:    MOCK (set OPENROUTER_API_KEY in .env and MOCK_VLM=0 for the real referee)\n' : `  VLM:    ${c.model} (fallbacks: ${c.fallbacks.join(', ') || 'none'})\n`);
+  console.log(c.mock ? '  VLM:    MOCK (set OPENROUTER_API_KEY in .env and MOCK_VLM=0 for the real referee)\n' : `  VLM:    ${c.model} (fallbacks: ${c.fallbacks.join(', ') || 'none'})\n  Walls:  ${wallsConfig().model} (fallbacks: ${wallsConfig().fallbacks.join(', ') || 'none'})\n`);
   if (!c.mock) checkConfiguredModels().catch(() => {});
 });

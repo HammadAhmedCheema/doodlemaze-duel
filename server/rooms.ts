@@ -5,7 +5,7 @@ import { validate, type MazeStats, type Issue, type WarningCode } from '../share
 import { ClientMsg, type BuildState, type Phase, type PlayerView, type RaceMaze, type ServerMsg, type ThemeSource, type ResultPlayer } from '../shared/protocol';
 import { defaultTheme, type Theme } from '../shared/theme';
 import type { Pt, Seg } from '../shared/types';
-import { requestTheme, vlmConfig } from './vlm';
+import { requestTheme, vlmConfig, wallsConfig } from './vlm';
 import { requestWalls } from './vlm/walls';
 
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // no I, O
@@ -298,7 +298,7 @@ function onMessage(c: Conn, m: ClientMsg) {
     if (c.wallsBusy) return send(ws, { type: 'ai_walls_result', ok: false, mode: m.mode, reason: 'Still working on your last request.' });
     if (!canCallVlm(c.room ? c.room.vlmCalls : c.soloCalls)) return send(ws, { type: 'ai_walls_result', ok: false, mode: m.mode, reason: 'Too many AI requests this minute. Try again shortly.' });
     c.wallsBusy = true;
-    requestWalls(m.mode, m.image, m.hint ?? '', cfg)
+    requestWalls(m.mode, m.image, m.hint ?? '', wallsConfig())
       .then((r) => send(ws, { type: 'ai_walls_result', ok: true, mode: m.mode, ...r }))
       .catch((e) => { console.warn('[vlm] walls failed:', (e as Error).message); const slow = /abort|timeout|budget/i.test((e as Error).message); send(ws, { type: 'ai_walls_result', ok: false, mode: m.mode, reason: slow ? 'The AI took too long, so the built-in tracer was used instead.' : 'The AI could not read that picture, so the built-in tracer was used instead.' }); })
       .finally(() => { c.wallsBusy = false; });
