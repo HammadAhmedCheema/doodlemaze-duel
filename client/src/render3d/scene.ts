@@ -252,21 +252,63 @@ export class MazeScene {
   private beastEyes: THREE.Object3D[] = [];
   private segs: Seg[] = [];
 
+  private limbs: THREE.Object3D[] = [];
+  private walkPhase = 0;
+  private lastPos: { x: number; z: number } | null = null;
+
+  /** Blocky toy-style character: box head, torso, arms and legs. Local +x is forward. */
   private ensureAvatar() {
     if (this.avatar) return this.avatar;
     const g = new THREE.Group();
     const accent = new THREE.Color(0x22d3ee);
-    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.17, 0.75, 6, 12), new THREE.MeshStandardMaterial({ color: 0xe6e9f5, emissive: accent, emissiveIntensity: 0.25, roughness: 0.4 }));
-    body.position.y = 0.6;
-    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.26), new THREE.MeshBasicMaterial({ color: accent }));
-    visor.position.set(0.14, 1.0, 0);
+    const mat = (color: number, glow = 0) => new THREE.MeshStandardMaterial({ color, roughness: 0.55, emissive: accent, emissiveIntensity: glow });
+    const skin = mat(0xf6c453), shirt = mat(0x22d3ee, 0.25), pants = mat(0x3b4cca), shoe = mat(0x1f2937);
+    const box = (w: number, h: number, d: number, m: THREE.Material) => new THREE.Mesh(new THREE.BoxGeometry(d, h, w), m);
+    // limb hanging from a pivot at its top so it can swing
+    const limb = (len: number, thick: number, m: THREE.Material, z: number, y: number, foot?: THREE.Material) => {
+      const pivot = new THREE.Group();
+      pivot.position.set(0, y, z);
+      const part = box(thick, len, thick, m);
+      part.position.y = -len / 2;
+      pivot.add(part);
+      if (foot) { const f = box(thick, 0.08, thick + 0.06, foot); f.position.set(0.03, -len + 0.04, 0); pivot.add(f); }
+      g.add(pivot);
+      this.limbs.push(pivot);
+      return pivot;
+    };
+    limb(0.5, 0.17, pants, -0.1, 0.5, shoe); // left leg
+    limb(0.5, 0.17, pants, 0.1, 0.5, shoe); // right leg
+    const torso = box(0.42, 0.44, 0.22, shirt);
+    torso.position.y = 0.72;
+    limb(0.42, 0.14, skin, -0.29, 0.92); // left arm
+    limb(0.42, 0.14, skin, 0.29, 0.92); // right arm
+    const head = box(0.3, 0.3, 0.3, skin);
+    head.position.y = 1.12;
+    const black = new THREE.MeshBasicMaterial({ color: 0x111111 });
+    const face = new THREE.Group();
+    for (const z of [-0.07, 0.07]) { const eye = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.06, 0.04), black); eye.position.set(0.151, 1.15, z); face.add(eye); }
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.025, 0.12), black);
+    mouth.position.set(0.151, 1.06, 0);
+    face.add(mouth);
     const ring = new THREE.Mesh(new THREE.RingGeometry(0.3, 0.38, 32), new THREE.MeshBasicMaterial({ color: accent, side: THREE.DoubleSide, transparent: true, opacity: 0.7 }));
     ring.rotation.x = -Math.PI / 2;
     ring.position.y = 0.03;
-    g.add(body, visor, ring);
+    g.add(torso, head, face, ring);
     this.scene.add(g);
     this.avatar = g;
     return g;
+  }
+
+  /** Swing arms and legs in proportion to distance walked; settle back when standing still. */
+  private animateWalk(x: number, z: number) {
+    const moved = this.lastPos ? Math.hypot(x - this.lastPos.x, z - this.lastPos.z) : 0;
+    this.lastPos = { x, z };
+    if (moved > 0.0005 && moved < 1) this.walkPhase += moved * 9;
+    const amp = moved > 0.0005 ? 0.6 : 0;
+    const [ll, rl, la, ra] = this.limbs;
+    const sw = Math.sin(this.walkPhase) * amp;
+    const ease = (o: THREE.Object3D, target: number) => { o.rotation.z += (target - o.rotation.z) * 0.35; };
+    ease(ll, sw); ease(rl, -sw); ease(la, -sw * 0.8); ease(ra, sw * 0.8);
   }
 
   /** Distance (logical units) a ray from (x,y) in direction (dx,dy) travels before hitting a wall line, capped at max. */
@@ -291,6 +333,7 @@ export class MazeScene {
       avatar.visible = this.view !== 'first';
       avatar.position.set(w.x, 0, w.z);
       avatar.rotation.y = -angle;
+      if (avatar.visible) this.animateWalk(w.x, w.z);
     }
     if (this.view === 'first') {
       this.camera.position.set(w.x, EYE_HEIGHT_M, w.z);
