@@ -56,51 +56,128 @@ export function parseWalls(raw: unknown): Omit<WallsResult, 'model'> {
   return { strokes, start: o.start, goal: o.goal };
 }
 
+const NUM = String.raw`(-?\d+(?:\.\d+)?)`;
+const ARR4 = new RegExp(String.raw`\[\s*${NUM}\s*,\s*${NUM}\s*,\s*${NUM}\s*,\s*${NUM}\s*\]`, 'g');
+const OBJ4 = new RegExp(String.raw`\{\s*"x1"\s*:\s*${NUM}\s*,\s*"y1"\s*:\s*${NUM}\s*,\s*"x2"\s*:\s*${NUM}\s*,\s*"y2"\s*:\s*${NUM}\s*\}`, 'g');
+const point = (text: string, key: string) => {
+  const m = new RegExp(String.raw`"${key}"\s*:\s*(?:\[\s*${NUM}\s*,\s*${NUM}\s*\]|\{\s*"x"\s*:\s*${NUM}\s*,\s*"y"\s*:\s*${NUM}\s*\})`).exec(text);
+  if (!m) return null;
+  return m[1] !== undefined ? [Number(m[1]), Number(m[2])] : [Number(m[3]), Number(m[4])];
+};
+
+/**
+ * Lenient scan of a (possibly cut-off) reply: every complete [x1,y1,x2,y2] or {"x1":..} in the text,
+ * de-duplicated, plus start/goal if present. Lets us use a partial answer when the model is slow or loops.
+ */
+export function scanWalls(text: string): { walls: number[][]; start: number[] | null; goal: number[] | null } {
+  const seen = new Set<string>();
+  const walls: number[][] = [];
+  for (const re of [ARR4, OBJ4]) {
+    re.lastIndex = 0;
+    for (let m = re.exec(text); m; m = re.exec(text)) {
+      const w = [1, 2, 3, 4].map((i) => Number(m![i]));
+      const key = w.map((v) => Math.round(v / 5)).join(',');
+      const rev = [w[2], w[3], w[0], w[1]].map((v) => Math.round(v / 5)).join(',');
+      if (seen.has(key) || seen.has(rev)) continue;
+      seen.add(key);
+      walls.push(w);
+    }
+  }
+  return { walls, start: point(text, 'start'), goal: point(text, 'goal') };
+}
+
+const STREAM_BUDGET_MS = Number(process.env.VLM_WALLS_TIMEOUT_MS) || 35_000;
+
 /**
  * Ask the VLM for wall geometry. The result is only a proposal: the client loads it into the editor and
- * the normal validator decides. Uses json_object mode (strict json_schema made the model return empty
- * lists), retries once if the answer has no walls, and logs the raw reply when that happens.
+ * the normal validator decides. The reply is STREAMED: we stop after a time budget, when the model starts
+ * repeating itself, or at 120 walls, and keep every complete wall received so far. So a slow or looping
+ * model still gives a usable answer instead of a timeout. One nudge retry if no walls came back at all.
  */
 export async function requestWalls(mode: WallMode, image: string, hint: string, cfg: { model: string; fallbacks: string[] }, outer?: AbortSignal): Promise<WallsResult> {
-  const deadline = Date.now() + 55_000;
   let nudge = '';
   let plainText = false;
   for (let attempt = 0; attempt < 3; attempt++) {
-    const budget = deadline - Date.now();
-    if (budget < 5000) break;
-    const signals = [AbortSignal.timeout(Math.min(45_000, budget))];
+    const ac = new AbortController();
+    const stopAt = Date.now() + STREAM_BUDGET_MS;
+    const timer = setTimeout(() => ac.abort(new Error('stream budget')), STREAM_BUDGET_MS + 2000);
+    const signals = [ac.signal];
     if (outer) signals.push(outer);
     const t0 = Date.now();
     const userText = [hint, nudge, 'List the walls now as JSON.'].filter(Boolean).join('\n');
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      signal: AbortSignal.any(signals),
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://github.com/HammadAhmedCheema/doodlemaze-duel', 'X-Title': 'DoodleMaze Duel' },
-      body: JSON.stringify({
-        model: cfg.model,
-        models: [cfg.model, ...cfg.fallbacks],
-        temperature: attempt ? 0.4 : 0.1,
-        max_tokens: 2500,
-        ...(plainText ? {} : { response_format: { type: 'json_object' } }),
-        // instructions in the user turn: Gemma has no system role
-        messages: [{ role: 'user', content: [{ type: 'text', text: PROMPTS[mode] }, { type: 'image_url', image_url: { url: image } }, { type: 'text', text: userText }] }],
-      }),
-    });
-    if (!res.ok) {
-      const t = (await res.text()).slice(0, 300);
-      if (attempt < 2 && res.status >= 400 && res.status < 500 && ![401, 402, 429].includes(res.status) && !plainText) { console.warn(`[vlm] ${mode}: ${res.status} with json_object, retrying without response_format: ${t}`); plainText = true; continue; }
-      throw new Error(`OpenRouter ${res.status}: ${t}`);
+    let text = '';
+    let model = cfg.model;
+    let stopReason = 'done';
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        signal: AbortSignal.any(signals),
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://github.com/HammadAhmedCheema/doodlemaze-duel', 'X-Title': 'DoodleMaze Duel' },
+        body: JSON.stringify({
+          model: cfg.model,
+          models: [cfg.model, ...cfg.fallbacks],
+          temperature: attempt ? 0.4 : 0.1,
+          max_tokens: 1800,
+          stream: true,
+          ...(plainText ? {} : { response_format: { type: 'json_object' } }),
+          // instructions in the user turn: Gemma has no system role
+          messages: [{ role: 'user', content: [{ type: 'text', text: PROMPTS[mode] }, { type: 'image_url', image_url: { url: image } }, { type: 'text', text: userText }] }],
+        }),
+      });
+      if (!res.ok) {
+        const t = (await res.text()).slice(0, 300);
+        if (attempt < 2 && res.status >= 400 && res.status < 500 && ![401, 402, 429].includes(res.status) && !plainText) { console.warn(`[vlm] ${mode}: ${res.status} with json_object, retrying without response_format: ${t}`); plainText = true; continue; }
+        throw new Error(`OpenRouter ${res.status}: ${t}`);
+      }
+      if (!(res.headers.get('content-type') ?? '').includes('event-stream')) {
+        // provider ignored stream: plain JSON body
+        const j = (await res.json()) as { model?: string; choices?: Array<{ message?: { content?: string } }> };
+        text = j.choices?.[0]?.message?.content ?? '';
+        model = j.model ?? model;
+      } else {
+        const reader = res.body!.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        let lastCount = 0, lastGrowth = Date.now();
+        outer: for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let nl: number;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (!line.startsWith('data:')) continue;
+            const data = line.slice(5).trim();
+            if (data === '[DONE]') break outer;
+            try {
+              const ev = JSON.parse(data) as { model?: string; choices?: Array<{ delta?: { content?: string }; finish_reason?: string | null }> };
+              if (ev.model) model = ev.model;
+              text += ev.choices?.[0]?.delta?.content ?? '';
+            } catch { /* keep-alive or partial */ }
+          }
+          const n = scanWalls(text).walls.length;
+          if (n > lastCount) { lastCount = n; lastGrowth = Date.now(); }
+          if (n >= 120) { stopReason = 'enough walls'; break; }
+          if (Date.now() > stopAt) { stopReason = 'time budget'; break; }
+          if (n >= 6 && Date.now() - lastGrowth > 6000) { stopReason = 'model repeating itself'; break; }
+        }
+        ac.abort();
+      }
+    } catch (e) {
+      if (outer?.aborted) throw e;
+      if (!text) { clearTimeout(timer); throw e; }
+      stopReason = 'connection cut';
+    } finally {
+      clearTimeout(timer);
     }
-    const j = (await res.json()) as { model?: string; choices?: Array<{ message?: { content?: string | Array<{ text?: string }> } }>; usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number } };
-    const c = j.choices?.[0]?.message?.content;
-    const text = Array.isArray(c) ? c.map((x) => x.text ?? '').join('') : c ?? '';
-    let out: Omit<WallsResult, 'model'> = { strokes: [], start: null, goal: null };
-    try { out = parseWalls(extractJson(text)); } catch { /* reported below */ }
-    const u = j.usage;
-    console.log(`[vlm] ${mode}: ${j.model} returned ${out.strokes.length} walls in ${Date.now() - t0} ms (tokens in ${u?.prompt_tokens ?? '?'}, out ${u?.completion_tokens ?? '?'}, cost $${u?.cost ?? '?'})`);
-    if (out.strokes.length >= 3) return { ...out, model: j.model ?? cfg.model };
+    let out: Omit<WallsResult, 'model'>;
+    try { out = parseWalls(extractJson(text)); } catch { out = { strokes: [], start: null, goal: null }; }
+    if (out.strokes.length < 3) out = parseWalls(scanWalls(text)); // cut-off or messy reply
+    console.log(`[vlm] ${mode}: ${model} gave ${out.strokes.length} walls in ${Date.now() - t0} ms (${text.length} chars, stopped: ${stopReason})`);
+    if (out.strokes.length >= 3) return { ...out, model };
     console.warn(`[vlm] ${mode}: too few walls, raw reply was: ${text.slice(0, 300).replace(/\s+/g, ' ')}`);
-    if (nudge) break; // already nudged once
+    if (nudge) break;
     nudge = 'Your previous answer listed no walls, but the picture clearly contains black wall lines. Trace every one of them.';
   }
   throw new Error('the model returned no usable walls');

@@ -316,9 +316,16 @@ function drawScreen() {
   const aiStatus = h('div', { class: 'muted', style: { fontSize: '13px', minHeight: '18px' } });
   const fileIn = h('input', { type: 'file', accept: 'image/*', style: { display: 'none' } }) as HTMLInputElement;
   let pendingFallback: (() => void) | null = null;
+  let busyTick = 0;
   const setBusy = (msg: string | null) => {
-    aiStatus.replaceChildren(...(msg ? [h('span', { class: 'spinner', style: { width: '12px', height: '12px', borderWidth: '2px', verticalAlign: 'middle', marginRight: '6px' } }), msg] : []));
+    clearInterval(busyTick);
     for (const b of [photoBtn, cleanBtn]) b.disabled = !!msg;
+    if (!msg) { aiStatus.replaceChildren(); return; }
+    const t0 = performance.now();
+    const secs = h('span', { class: 'muted' }, ' 0 s');
+    aiStatus.replaceChildren(h('span', { class: 'spinner', style: { width: '12px', height: '12px', borderWidth: '2px', verticalAlign: 'middle', marginRight: '6px' } }), msg, secs,
+      h('div', { style: { fontSize: '12px', marginTop: '4px' } }, 'Large mazes take 10-30 s. If the AI is too slow, the built-in tracer takes over automatically.'));
+    busyTick = window.setInterval(() => { secs.textContent = ` ${Math.round((performance.now() - t0) / 1000)} s`; }, 500);
   };
   const describe = (n: number, by: string) => `${by} built ${n} wall${n === 1 ? '' : 's'}. Check the result, fix anything by hand, or Undo to go back.`;
   const applyPhoto = (strokes: MazeInput['strokes'], start: MazeInput['start'] | null, goal: MazeInput['goal'] | null, by: string) => {
@@ -365,6 +372,7 @@ function drawScreen() {
       sfx.click();
     } else {
       if (!m.ok) flash(m.reason);
+      else flash('The AI found too few walls, so the built-in tracer was used instead.');
       pendingFallback?.();
     }
     pendingFallback = null;
@@ -392,7 +400,7 @@ function drawScreen() {
   const el = h('div', {}, h('div', { class: 'draw-layout', style: { gridTemplateColumns: 'minmax(0, 1fr) 340px' } }, canvasCol, side));
   show('draw', el, duel ? `Build · ${app.code}` : 'Solo · Draw');
   board.mount();
-  app.cleanup.push(() => board.destroy(), () => unsub());
+  app.cleanup.push(() => board.destroy(), () => unsub(), () => clearInterval(busyTick));
   if (app.myMaze) board.runValidation();
 
   if (duel) {

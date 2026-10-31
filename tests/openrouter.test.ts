@@ -57,3 +57,24 @@ describe('OpenRouter requests (fetch stubbed)', () => {
     expect(r.start).toEqual({ x: 60, y: 60 });
   });
 });
+
+describe('walls streaming', () => {
+  it('keeps the complete walls from a cut-off, looping stream', async () => {
+    const chunks = ['{"walls":[[12,12,988,12],', '[300,12,300,700],[600,300,600,988],', '[600,300,600,988],[600,300,600,988],[600,3'];
+    const sse = chunks.map((c) => `data: ${JSON.stringify({ model: 'google/gemma-3-27b-it', choices: [{ delta: { content: c } }] })}\n\n`).join('') + 'data: [DONE]\n\n';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })));
+    const r = await requestWalls('clean', 'data:image/jpeg;base64,AAAA', '', cfg);
+    expect(r.strokes.length).toBe(3);
+    expect(r.model).toBe('google/gemma-3-27b-it');
+  });
+});
+
+import { scanWalls } from '../server/vlm/walls';
+describe('scanWalls', () => {
+  it('finds arrays, objects and start/goal in messy text', () => {
+    const r = scanWalls('x {"walls":[{"x1":1,"y1":2,"x2":300,"y2":2}, [5,5,5,500]], "start":{"x":10,"y":20},"goal":[900,900');
+    expect(r.walls.length).toBe(2);
+    expect(r.start).toEqual([10, 20]);
+    expect(r.goal).toBeNull();
+  });
+});

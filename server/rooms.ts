@@ -300,7 +300,7 @@ function onMessage(c: Conn, m: ClientMsg) {
     c.wallsBusy = true;
     requestWalls(m.mode, m.image, m.hint ?? '', cfg)
       .then((r) => send(ws, { type: 'ai_walls_result', ok: true, mode: m.mode, ...r }))
-      .catch((e) => { console.warn('[vlm] walls failed:', (e as Error).message); send(ws, { type: 'ai_walls_result', ok: false, mode: m.mode, reason: 'The AI could not read that picture, so this used the built-in tracer instead.' }); })
+      .catch((e) => { console.warn('[vlm] walls failed:', (e as Error).message); const slow = /abort|timeout|budget/i.test((e as Error).message); send(ws, { type: 'ai_walls_result', ok: false, mode: m.mode, reason: slow ? 'The AI took too long, so the built-in tracer was used instead.' : 'The AI could not read that picture, so the built-in tracer was used instead.' }); })
       .finally(() => { c.wallsBusy = false; });
     return;
   }
