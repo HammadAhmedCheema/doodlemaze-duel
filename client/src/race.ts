@@ -6,7 +6,8 @@ import type { Pt, Seg } from '../../shared/types';
 import { Controls, Physics } from './game/physics';
 import { MazeScene } from './render3d/scene';
 import { h, fmtTime, debugMode } from './ui';
-import { sfx } from './sound';
+import { sfx, Soundscape } from './sound';
+import { Minimap } from './minimap';
 
 export type RaceOpts = {
   maze: { segments: Seg[]; start: Pt; goal: Pt; theme: Theme; authorName?: string; beast?: boolean };
@@ -35,6 +36,10 @@ export class Race {
   private beast: Beast | null = null;
   private catches = 0;
   private lastGrowl = 0;
+  private sound = new Soundscape();
+  private minimap: Minimap;
+  private mapWrap: HTMLElement;
+  private lastMap = 0;
   private vignette: HTMLElement;
   private viewLabel: HTMLElement;
   private ui: {
@@ -99,10 +104,18 @@ export class Race {
       m.beast ? h('div', { class: 'pane beast-pane' }, '👹 A beast hunts this maze') : '',
     );
     const bl = h('div', { class: 'bl' }, h('div', { class: 'pane muted', style: { fontSize: '12px' } },
-      h('span', { class: 'kbd' }, 'W/S'), ' move  ', h('span', { class: 'kbd' }, 'A/D'), ' turn  ', h('span', { class: 'kbd' }, 'Q/E'), ' strafe  ', h('span', { class: 'kbd' }, 'V'), ' camera  · click for mouse look'), debug);
-    this.el.append(this.vignette, h('div', { class: 'hud' }, tl, tr, bl, h('div', { class: 'crosshair' }), toast), center);
+      h('span', { class: 'kbd' }, 'W/S'), ' move  ', h('span', { class: 'kbd' }, 'A/D'), ' turn  ', h('span', { class: 'kbd' }, 'Q/E'), ' strafe  ', h('span', { class: 'kbd' }, 'V'), ' camera  ', h('span', { class: 'kbd' }, 'M'), ' map  · click for mouse look'), debug);
+    this.minimap = new Minimap(m.segments, m.start, m.goal, Math.round(Math.min(200, Math.max(140, window.innerHeight * 0.24))));
+    this.mapWrap = h('div', { class: 'minimap-wrap' }, this.minimap.el,
+      h('div', { class: 'minimap-legend' }, h('span', { style: { color: '#22d3ee' } }, '▲'), ' you  ', h('span', { style: { color: '#facc15' } }, '●'), ' goal', m.beast ? h('span', {}, '  ', h('span', { style: { color: '#f43f5e' } }, '●'), ' beast') : '', '  · M hides'));
+    const onM = (e: KeyboardEvent) => { if (e.key.toLowerCase() === 'm') this.mapWrap.style.display = this.mapWrap.style.display === 'none' ? '' : 'none'; };
+    window.addEventListener('keydown', onM);
+    const prevView = this.viewCleanup;
+    this.viewCleanup = () => { prevView?.(); window.removeEventListener('keydown', onM); };
+    this.el.append(this.vignette, h('div', { class: 'hud' }, tl, tr, bl, this.mapWrap, h('div', { class: 'crosshair' }), toast), center);
     this.ui = { clock, me, mePct, opp, oppPct, center, debug, toast };
 
+    this.minimap.draw(this.physics.state, this.beast ? { x: this.beast.x, y: this.beast.y, awake: false } : null);
     this.scene.onFrame = (dt, now) => this.frame(dt, now);
     if (debugMode) {
       // debug-only shortcut for testing and screenshots: T jumps next to the goal (the server still enforces the speed check)
@@ -151,6 +164,7 @@ export class Race {
       this.lastCount = 0;
       this.controls.enabled = true;
       sfx.beep(880, 0.25);
+      this.sound.start(!!this.beast);
       this.ui.center.replaceChildren(h('div', { class: 'countnum' }, 'GO!'));
       setTimeout(() => { if (this.lastCount === 0 && !this.finishedAt) this.ui.center.replaceChildren(); }, 700);
     }
@@ -164,6 +178,10 @@ export class Race {
       if (Number.isFinite(d)) this.progress = Math.max(0, Math.min(1, 1 - d / this.startDist));
       const elapsed = now - this.startAt;
       if (this.beast) this.updateBeast(dt, now);
+      if (now - this.lastMap > 50) {
+        this.lastMap = now;
+        this.minimap.draw(s, this.beast ? { x: this.beast.x, y: this.beast.y, awake: this.beast.awake } : null);
+      }
       this.ui.clock.textContent = fmtTime(elapsed);
       this.ui.me.style.width = `${Math.round(this.progress * 100)}%`;
       this.ui.mePct.textContent = `${Math.round(this.progress * 100)}%`;
@@ -176,6 +194,7 @@ export class Race {
         this.controls.enabled = false;
         this.ui.me.style.width = '100%';
         this.ui.mePct.textContent = '100%';
+        this.sound.stop();
         sfx.jingle();
         this.ui.center.replaceChildren(h('div', { class: 'countnum', style: { fontSize: '90px' } }, 'FINISHED'), h('div', { class: 'clock', style: { fontSize: '40px', fontWeight: '900' } }, fmtTime(elapsed)));
         this.opts.onProgress?.(1);
@@ -195,6 +214,8 @@ export class Race {
     // fear: red vignette and growls as it gets close
     const fear = b.awake ? Math.max(0, Math.min(1, 1 - (d - 40) / 260)) : 0;
     this.vignette.style.opacity = String(fear * 0.85);
+    // continuous danger sound: audible from ~450 units away, loudest when it is on top of you
+    this.sound.setDanger(b.awake ? Math.max(0, Math.min(1, 1 - (d - 30) / 420)) : 0);
     if (fear > 0.25 && now - this.lastGrowl > 1400 - fear * 900) {
       this.lastGrowl = now;
       sfx.growl(fear);
@@ -217,6 +238,7 @@ export class Race {
   }
 
   stop() {
+    this.sound.stop();
     this.stopped = true;
     this.controls.enabled = false;
   }

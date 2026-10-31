@@ -73,8 +73,8 @@ The server prints its LAN address on boot, e.g. `http://192.168.1.23:3000`. Open
 2. Draw walls with the pen (mouse, touch or stylus), or use **AI assist**: upload a photo of a maze, or let the AI clean up your doodle. Place **Start ●** and **Goal ⚑**. The panel tells you live whether the maze is solvable; if not, the area Start can reach is tinted green so you can see the leak. Passages narrower than the player are rejected too.
 3. **Submit**. The AI referee judges it and shows its theme card. Press **Ready**.
 4. When both are ready, mazes are swapped and a synced countdown starts.
-5. Race: **W/S** forward/back, **A/D** turn (arrow keys work), **Q/E** strafe, **V** switch camera (first-person / third-person; overhead in solo), click for mouse look. Follow the glowing beacon. No minimap.
-6. **Beast mode (optional):** tick "Add a beast" while drawing and a shadow beast lives in your maze. It wakes 4 s after GO, hunts the racer through the corridors (pathfinding on the same grid as collision), and sends them back to the start if it catches them. The screen edges glow red and it growls as it gets close.
+5. Race: **W/S** forward/back, **A/D** turn (arrow keys work), **Q/E** strafe, **V** switch camera (first-person / third-person; overhead in solo), **M** show/hide the minimap, click for mouse look. Follow the glowing beacon; the minimap at the bottom shows you, the goal and the beast.
+6. **Beast mode (optional):** tick "Add a beast" while drawing and a shadow beast lives in your maze. It wakes 4 s after GO, hunts the racer through the corridors (pathfinding on the same grid as collision), and sends them back to the start if it catches them. The screen edges glow red, and a low drone and heartbeat get louder and faster the closer it is.
 7. **First to the goal wins.** Pace (ms per unit of shortest path) lets you compare runs on different mazes but does not decide the winner.
 
 The build timer (default 3 min) auto-submits a valid maze when it runs out; an invalid one gets 30 s of overtime and is then replaced with a bundled maze.
