@@ -9,6 +9,7 @@ export class Net {
   private queue: string[] = [];
   private samples: Array<{ rtt: number; offset: number }> = [];
   offset = 0; // serverNow - localNow
+  get synced() { return this.samples.length > 0; }
   onOpen?: () => void;
   onClose?: () => void;
   private closedByUser = false;
@@ -19,10 +20,11 @@ export class Net {
     const ws = new WebSocket(url);
     this.ws = ws;
     ws.onopen = () => {
+      ws.send(JSON.stringify({ type: 'ping', t: performance.now() }));
       for (const q of this.queue) ws.send(q);
       this.queue = [];
       this.samples = [];
-      for (let i = 0; i < 5; i++) setTimeout(() => this.send({ type: 'ping', t: performance.now() }), i * 120);
+      for (let i = 1; i < 5; i++) setTimeout(() => this.send({ type: 'ping', t: performance.now() }), i * 120);
       this.onOpen?.();
     };
     ws.onmessage = (ev) => {

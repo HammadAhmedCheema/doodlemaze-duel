@@ -22,3 +22,4 @@ Choices made where the PRD left room, simplest option first.
 - **Proxy-free fetch**: the server uses Node's built-in `fetch`. OpenRouter must be reachable from the machine running `npm start`.
 - **`npm run vlm:test`** was added (one real call on a sample maze) so the team can confirm the key and model before the demo without playing a full round.
 - **Debug cheat:** with `?debug=1`, pressing T in a race jumps next to the goal. Used for automated screenshots; the server's speed check still applies, so it cannot win a real match early.
+- **Build timer uses the server clock lazily**: `room_state` can arrive before the first pong, so the end time is stored in server time and converted on every tick; the first ping is sent before any queued message.

@@ -132,7 +132,7 @@ function onServer(m: ServerMsg) {
       app.phase = m.phase;
       app.players = m.players;
       app.hostId = m.hostId;
-      app.buildEndsAt = m.buildEndsAt === null ? null : net.toLocal(m.buildEndsAt);
+      app.buildEndsAt = m.buildEndsAt; // server clock; converted when used, after the ping offset settles
       app.buildTimeS = m.buildTimeS;
       if (m.phase === 'LOBBY' && app.screen !== 'lobby') lobbyScreen();
       else if (m.phase === 'BUILD' && (prev !== 'BUILD' || !['draw', 'theme'].includes(app.screen))) {
@@ -332,7 +332,8 @@ function drawScreen() {
     renderOpp();
     const tick = window.setInterval(() => {
       if (app.buildEndsAt === null) { timerText.textContent = 'no limit'; return; }
-      const left = app.buildEndsAt + (overtime ? 30000 : 0) - performance.now();
+      if (!net.synced) { timerText.textContent = 'syncing…'; return; }
+      const left = net.toLocal(app.buildEndsAt) + (overtime ? 30000 : 0) - performance.now();
       const total = overtime ? 30000 : app.buildTimeS * 1000;
       (timerBar.firstElementChild as HTMLElement).style.width = `${Math.max(0, Math.min(100, ((overtime ? left : left) / total) * 100))}%`;
       timerBar.classList.toggle('low', left < 20000);
