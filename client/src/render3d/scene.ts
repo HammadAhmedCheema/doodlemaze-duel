@@ -1,0 +1,312 @@
+import * as THREE from 'three';
+import { CANVAS, EYE_HEIGHT_M, WALL_HEIGHT_M, WALL_THICKNESS, WORLD_SCALE } from '../../../shared/constants';
+import { playablePalette, type Theme } from '../../../shared/theme';
+import { hashString, rng } from '../../../shared/hash';
+import type { Pt, Seg } from '../../../shared/types';
+import { floorMaterial, wallMaterial } from './materials';
+
+export type SceneMaze = { segments: Seg[]; start: Pt; goal: Pt; theme: Theme; deadEnds?: Pt[]; path?: Pt[] };
+
+const S = WORLD_SCALE;
+const H = WALL_HEIGHT_M;
+const T = WALL_THICKNESS * S;
+export const toWorld = (p: Pt) => new THREE.Vector3((p.x - CANVAS / 2) * S, 0, (p.y - CANVAS / 2) * S);
+
+/** Merge every wall segment into one BufferGeometry (one draw call), with UVs in meters so textures tile evenly. */
+export function buildWallGeometry(segs: Seg[]): THREE.BufferGeometry {
+  const pos: number[] = [];
+  const nor: number[] = [];
+  const uv: number[] = [];
+  const idx: number[] = [];
+  const tile = H; // one texture tile per wall height
+  const quad = (a: number[], b: number[], c: number[], d: number[], n: number[], uw: number, vh: number, u0 = 0) => {
+    const base = pos.length / 3;
+    pos.push(...a, ...b, ...c, ...d);
+    for (let i = 0; i < 4; i++) nor.push(...n);
+    uv.push(u0, 0, u0 + uw, 0, u0 + uw, vh, u0, vh);
+    idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  };
+  for (const s of segs) {
+    const ax = (s.x1 - CANVAS / 2) * S, az = (s.y1 - CANVAS / 2) * S;
+    const bx = (s.x2 - CANVAS / 2) * S, bz = (s.y2 - CANVAS / 2) * S;
+    const len = Math.hypot(bx - ax, bz - az);
+    if (len < 1e-6) continue;
+    const dx = (bx - ax) / len, dz = (bz - az) / len;
+    const nx = -dz, nz = dx;
+    const e = T / 2; // extend ends so corners overlap like round caps
+    const x0 = ax - dx * e, z0 = az - dz * e, x1 = bx + dx * e, z1 = bz + dz * e;
+    const L = len + 2 * e;
+    const p = (x: number, z: number, side: number, y: number) => [x + nx * side * (T / 2), y, z + nz * side * (T / 2)];
+    const u0 = ((ax * 7.13 + az * 3.71) % 1 + 1) % 1; // break up repetition between walls
+    // +n side
+    quad(p(x0, z0, 1, 0), p(x1, z1, 1, 0), p(x1, z1, 1, H), p(x0, z0, 1, H), [nx, 0, nz], L / tile, H / tile, u0);
+    // -n side (reverse winding)
+    quad(p(x1, z1, -1, 0), p(x0, z0, -1, 0), p(x0, z0, -1, H), p(x1, z1, -1, H), [-nx, 0, -nz], L / tile, H / tile, u0);
+    // end caps
+    quad(p(x0, z0, -1, 0), p(x0, z0, 1, 0), p(x0, z0, 1, H), p(x0, z0, -1, H), [-dx, 0, -dz], T / tile, H / tile);
+    quad(p(x1, z1, 1, 0), p(x1, z1, -1, 0), p(x1, z1, -1, H), p(x1, z1, 1, H), [dx, 0, dz], T / tile, H / tile);
+    // top
+    quad(p(x0, z0, 1, H), p(x1, z1, 1, H), p(x1, z1, -1, H), p(x0, z0, -1, H), [0, 1, 0], L / tile, T / tile);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.computeBoundingSphere();
+  return g;
+}
+
+const MOODS: Record<Theme['mood'], { amb: number; hemi: number; sun: number; sunColor: number; player: number; exposure: number }> = {
+  day: { amb: 0.7, hemi: 0.9, sun: 2.2, sunColor: 0xfff4e0, player: 1.5, exposure: 1.0 },
+  dusk: { amb: 0.45, hemi: 0.55, sun: 1.3, sunColor: 0xffa860, player: 3, exposure: 1.0 },
+  night: { amb: 0.2, hemi: 0.22, sun: 0.3, sunColor: 0x8aa0ff, player: 6, exposure: 1.1 },
+  neon: { amb: 0.25, hemi: 0.28, sun: 0.35, sunColor: 0xc084fc, player: 5, exposure: 1.1 },
+};
+
+export class MazeScene {
+  readonly renderer: THREE.WebGLRenderer;
+  readonly scene = new THREE.Scene();
+  readonly camera = new THREE.PerspectiveCamera(72, 1, 0.05, 120);
+  private ro: ResizeObserver;
+  private raf = 0;
+  private last = performance.now();
+  private disposed = false;
+  private goalRing!: THREE.Mesh;
+  private beacon!: THREE.Mesh;
+  private flames: THREE.Object3D[] = [];
+  private playerLight: THREE.PointLight;
+  orbit = false;
+  private orbitFog = false;
+  onFrame?: (dt: number, now: number) => void;
+  fps = 0;
+
+  constructor(private container: HTMLElement, maze: SceneMaze) {
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    container.prepend(this.renderer.domElement);
+
+    const theme = { ...maze.theme, palette: playablePalette(maze.theme.palette) };
+    const seed = parseInt(hashString(JSON.stringify(maze.segments) + JSON.stringify(maze.start) + JSON.stringify(maze.goal)), 16);
+    const mood = MOODS[theme.mood];
+    this.renderer.toneMappingExposure = mood.exposure;
+
+    const sky = new THREE.Color(theme.palette.sky);
+    this.scene.background = sky;
+    this.scene.fog = new THREE.FogExp2(sky, Math.max(0.006, theme.fogDensity) * 1.6);
+
+    // lights
+    this.scene.add(new THREE.AmbientLight(0xffffff, mood.amb));
+    this.scene.add(new THREE.HemisphereLight(sky.clone().lerp(new THREE.Color(0xffffff), 0.5), new THREE.Color(theme.palette.floor), mood.hemi));
+    const sun = new THREE.DirectionalLight(mood.sunColor, mood.sun);
+    sun.position.set(12, 25, 8);
+    this.scene.add(sun);
+    this.playerLight = new THREE.PointLight(0xfff1d6, mood.player, 12, 2);
+    this.scene.add(this.playerLight);
+
+    // floor
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(CANVAS * S, CANVAS * S), floorMaterial(theme, seed));
+    floor.rotation.x = -Math.PI / 2;
+    this.scene.add(floor);
+
+    // walls: one merged geometry, one material, one draw call
+    const walls = new THREE.Mesh(buildWallGeometry(maze.segments), wallMaterial(theme, seed));
+    this.scene.add(walls);
+
+    // start pad
+    const sp = toWorld(maze.start);
+    const pad = new THREE.Mesh(new THREE.RingGeometry(0.35, 0.55, 40), new THREE.MeshBasicMaterial({ color: 0x22c55e, side: THREE.DoubleSide }));
+    pad.rotation.x = -Math.PI / 2;
+    pad.position.set(sp.x, 0.02, sp.z);
+    this.scene.add(pad);
+
+    // goal: tall glowing column, visible above the walls from anywhere, plus a pulsing ring
+    const gp = toWorld(maze.goal);
+    const accent = new THREE.Color(theme.palette.accent);
+    this.beacon = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.28, 0.28, 14, 24, 1, true),
+      new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }),
+    );
+    this.beacon.position.set(gp.x, 7, gp.z);
+    this.scene.add(this.beacon);
+    const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.3), new THREE.MeshBasicMaterial({ color: accent }));
+    core.position.set(gp.x, 1.3, gp.z);
+    this.flames.push(core);
+    this.scene.add(core);
+    this.goalRing = new THREE.Mesh(new THREE.RingGeometry(0.4, 0.6, 40), new THREE.MeshBasicMaterial({ color: accent, transparent: true, side: THREE.DoubleSide }));
+    this.goalRing.rotation.x = -Math.PI / 2;
+    this.goalRing.position.set(gp.x, 0.03, gp.z);
+    this.scene.add(this.goalRing);
+    const gl = new THREE.PointLight(accent, 8, 8, 1.5);
+    gl.position.set(gp.x, 1.6, gp.z);
+    this.scene.add(gl);
+
+    this.addProps(theme, maze.deadEnds ?? [], seed);
+
+    if (maze.path && maze.path.length > 1) {
+      const pts = maze.path.map((p) => toWorld(p).setY(0.06));
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: 0xfacc15 }));
+      this.scene.add(line);
+    }
+
+    this.ro = new ResizeObserver(() => this.resize());
+    this.ro.observe(container);
+    this.resize();
+    this.setPlayer(maze.start.x, maze.start.y, 0);
+    this.loop();
+  }
+
+  private addProps(theme: Theme, deadEnds: Pt[], seed: number) {
+    const kinds = theme.props.length ? theme.props : ['torch' as const];
+    const rand = rng(seed ^ 0x9e3779b9);
+    const pts = deadEnds.slice().sort(() => rand() - 0.5).slice(0, 14);
+    const accent = new THREE.Color(theme.palette.accent);
+    const wallC = new THREE.Color(theme.palette.wall);
+    let lights = 0;
+    const std = (c: THREE.ColorRepresentation, extra: Partial<THREE.MeshStandardMaterialParameters> = {}) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.8, ...extra });
+    const glow = new THREE.MeshBasicMaterial({ color: accent });
+    pts.forEach((p, i) => {
+      const kind = kinds[i % kinds.length];
+      const g = new THREE.Group();
+      const w = toWorld(p);
+      g.position.set(w.x, 0, w.z);
+      g.rotation.y = rand() * Math.PI * 2;
+      let emits = false;
+      switch (kind) {
+        case 'torch': {
+          const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 1.3, 8), std(0x5b3a1e));
+          pole.position.y = 0.65;
+          const flame = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.25, 10), glow);
+          flame.position.y = 1.42;
+          this.flames.push(flame);
+          g.add(pole, flame);
+          emits = true;
+          break;
+        }
+        case 'lantern': {
+          const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.6, 6), std(0x333333, { metalness: 0.6 }));
+          pole.position.y = 0.8;
+          const box = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.26, 0.2), glow);
+          box.position.y = 1.7;
+          this.flames.push(box);
+          g.add(pole, box);
+          emits = true;
+          break;
+        }
+        case 'crystal': {
+          const c = new THREE.Mesh(new THREE.OctahedronGeometry(0.28), std(accent, { emissive: accent, emissiveIntensity: 0.9, roughness: 0.2 }));
+          c.scale.y = 2;
+          c.position.y = 0.6;
+          g.add(c);
+          emits = true;
+          break;
+        }
+        case 'tree': {
+          const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 0.8, 8), std(0x6b4423));
+          trunk.position.y = 0.4;
+          const top = new THREE.Mesh(new THREE.ConeGeometry(0.42, 1.2, 10), std(0x2f7d32));
+          top.position.y = 1.3;
+          g.add(trunk, top);
+          break;
+        }
+        case 'pillar': {
+          const p1 = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 2.1, 12), std(wallC));
+          p1.position.y = 1.05;
+          g.add(p1);
+          break;
+        }
+        case 'mushroom': {
+          const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.4, 8), std(0xf3e9d2));
+          stem.position.y = 0.2;
+          const cap = new THREE.Mesh(new THREE.SphereGeometry(0.25, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), std(accent, { emissive: accent, emissiveIntensity: 0.4 }));
+          cap.position.y = 0.38;
+          g.add(stem, cap);
+          emits = true;
+          break;
+        }
+        case 'rock': {
+          const r = new THREE.Mesh(new THREE.DodecahedronGeometry(0.3), std(0x777777, { flatShading: true }));
+          r.scale.set(1, 0.6, 1.2);
+          r.position.y = 0.15;
+          g.add(r);
+          break;
+        }
+      }
+      if (emits && lights < 4) {
+        const l = new THREE.PointLight(accent, 4, 6, 1.6);
+        l.position.y = 1.4;
+        g.add(l);
+        lights++;
+      }
+      this.scene.add(g);
+    });
+  }
+
+  setPlayer(x: number, y: number, angle: number) {
+    const w = toWorld({ x, y });
+    this.camera.position.set(w.x, EYE_HEIGHT_M, w.z);
+    this.camera.lookAt(w.x + Math.cos(angle), EYE_HEIGHT_M, w.z + Math.sin(angle));
+    // a little behind and above the eye, so walls right next to you are lit but not blown out
+    this.playerLight.position.set(w.x - Math.cos(angle) * 1.2, EYE_HEIGHT_M + 0.9, w.z - Math.sin(angle) * 1.2);
+  }
+
+  private resize() {
+    const r = this.container.getBoundingClientRect();
+    const w = Math.max(1, r.width);
+    const hgt = Math.max(1, r.height);
+    this.renderer.setSize(w, hgt, false);
+    this.renderer.domElement.style.width = '100%';
+    this.renderer.domElement.style.height = '100%';
+    this.camera.aspect = w / hgt;
+    this.camera.updateProjectionMatrix();
+  }
+
+  private frames = 0;
+  private fpsT = performance.now();
+  private loop = () => {
+    if (this.disposed) return;
+    this.raf = requestAnimationFrame(this.loop);
+    const now = performance.now();
+    const dt = (now - this.last) / 1000;
+    this.last = now;
+    this.onFrame?.(dt, now);
+    const t = now / 1000;
+    const pulse = 1 + 0.25 * Math.sin(t * 4);
+    this.goalRing.scale.set(pulse, pulse, pulse);
+    (this.beacon.material as THREE.MeshBasicMaterial).opacity = 0.35 + 0.15 * Math.sin(t * 3);
+    for (const f of this.flames) f.rotation.y = t * 2;
+    if (this.orbit) {
+      const r = 26;
+      if (this.scene.fog instanceof THREE.FogExp2 && !this.orbitFog) { this.orbitFog = true; this.scene.fog.density /= 4; }
+      this.camera.position.set(Math.cos(t * 0.25) * r, 20, Math.sin(t * 0.25) * r);
+      this.camera.lookAt(0, 0, 0);
+      this.playerLight.position.set(0, 10, 0);
+    }
+    this.renderer.render(this.scene, this.camera);
+    this.frames++;
+    if (now - this.fpsT > 500) {
+      this.fps = Math.round((this.frames * 1000) / (now - this.fpsT));
+      this.frames = 0;
+      this.fpsT = now;
+    }
+  };
+
+  dispose() {
+    this.disposed = true;
+    cancelAnimationFrame(this.raf);
+    this.ro.disconnect();
+    this.scene.traverse((o) => {
+      const m = o as THREE.Mesh;
+      m.geometry?.dispose();
+      const mat = m.material as THREE.Material | THREE.Material[] | undefined;
+      for (const x of Array.isArray(mat) ? mat : mat ? [mat] : []) {
+        for (const v of Object.values(x)) if (v instanceof THREE.Texture) v.dispose();
+        x.dispose();
+      }
+    });
+    this.renderer.dispose();
+    this.renderer.domElement.remove();
+  }
+}
