@@ -13,11 +13,17 @@ import { checkConfiguredModels } from './vlm/models';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
 
+function lanAddresses(): string[] {
+  const out: string[] = [];
+  for (const ifs of Object.values(os.networkInterfaces())) for (const i of ifs ?? []) if (i.family === 'IPv4' && !i.internal) out.push(i.address);
+  return out;
+}
+
 const app = express();
 app.get('/api/health', (_req, res) => res.json({ ok: true, time: Date.now() }));
 app.get('/api/config', (_req, res) => {
   const c = vlmConfig();
-  res.json({ model: c.mock ? 'mock-referee' : c.model, fallbacks: c.mock ? [] : c.fallbacks, mock: c.mock });
+  res.json({ model: c.mock ? 'mock-referee' : c.model, fallbacks: c.mock ? [] : c.fallbacks, mock: c.mock, lan: lanAddresses().map((a) => `http://${a}:${PORT}`) });
 });
 
 const clientDir = path.resolve(__dirname, '../dist/client');

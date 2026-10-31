@@ -57,7 +57,12 @@ root.append(
     h('span', {}, 'Hacktoberfest Islamabad 2026 · MIT')),
 );
 
-fetch('/api/config').then((r) => r.json()).then((c) => setModel(c.model, c.mock)).catch(() => setModel('offline', true));
+let lanBase = location.origin;
+fetch('/api/config').then((r) => r.json()).then((c) => {
+  setModel(c.model, c.mock);
+  // when the host opened localhost, share the LAN address instead so the other device can reach it
+  if (['localhost', '127.0.0.1'].includes(location.hostname) && c.lan?.length) lanBase = c.lan[0].replace(/:\d+$/, location.port ? `:${location.port}` : '');
+}).catch(() => setModel('offline', true));
 function setModel(m: string, mock: boolean) {
   app.model = m;
   app.mock = mock;
@@ -207,7 +212,7 @@ function landingScreen() {
 
 // ---------------------------------------------------------------- lobby
 function lobbyScreen() {
-  const url = `${location.origin}/?room=${app.code}`;
+  const url = `${lanBase}/?room=${app.code}`;
   const qr = h('canvas', { style: { width: '150px', height: '150px', borderRadius: '10px', background: '#fff' } }) as HTMLCanvasElement;
   QRCode.toCanvas(qr, url, { width: 150, margin: 1 }).catch(() => qr.remove());
   const list = h('div', { class: 'players' });
