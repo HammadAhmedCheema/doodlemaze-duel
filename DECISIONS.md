@@ -18,3 +18,6 @@ Choices made where the PRD left room, simplest option first.
 - **Lobby share link** uses the server's LAN IP when the host opened `localhost`, so the QR code works from the second device.
 - **The 50 ms validation budget** is checked as best-of-4 runs; `PERF_BUDGET_MS` can relax it on slow CI boxes.
 - **Extra dependencies:** none beyond the PRD list.
+- **README credits "an AI coding assistant (Claude Code)"** rather than Codex, because that is what was actually used.
+- **Proxy-free fetch**: the server uses Node's built-in `fetch`. OpenRouter must be reachable from the machine running `npm start`.
+- **`npm run vlm:test`** was added (one real call on a sample maze) so the team can confirm the key and model before the demo without playing a full round.

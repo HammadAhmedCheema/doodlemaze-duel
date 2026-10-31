@@ -5,7 +5,9 @@
   "description": "Draw a maze, let an open-weight VLM theme it, then race your friend through it in 3D.",
   "license": "MIT",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "concurrently -k -n server,client -c cyan,magenta \"tsx watch server/index.ts\" \"vite\"",
     "build": "vite build",
@@ -13,7 +15,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "models:vision": "tsx scripts/list-vision-models.ts",
-    "sim": "tsx scripts/sim.ts"
+    "sim": "tsx scripts/sim.ts",
+    "vlm:test": "tsx scripts/vlm-smoke.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
