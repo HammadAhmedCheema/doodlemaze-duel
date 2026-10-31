@@ -43,6 +43,8 @@ The same TypeScript geometry module (`shared/geometry`) runs in the browser (ins
 - **Fallback chain:** model → fallback model → one quick retry → default theme. The game always completes, even offline (`MOCK_VLM=1`) or when the player presses **Skip AI theme**.
 - **Cost control:** results cached by maze hash, one in-flight call per player, max 6 calls per room per minute, `max_tokens: 600`. A call costs well under a cent.
 
+- **AI assist while drawing:** *Maze from a photo* sends a picture of any maze (printed, hand-drawn, whiteboard) to the VLM, which returns wall segments plus Start/Goal as strict JSON. *AI clean-up* turns a wobbly doodle into clean straight walls. Both are only proposals: they load into the editor as ordinary strokes and go through the same sanitizer and pathfinding check, and Undo restores the old drawing. Without the AI, a built-in tracer (threshold + line runs) and straightener do the same job more roughly.
+
 Where the AI shows in the UI: the "referee is inspecting your maze" screen (with the model name), the theme card (name, palette, difficulty, comment), the race intro before the countdown, the result screen, and the footer.
 
 ## Setup
@@ -68,11 +70,12 @@ The server prints its LAN address on boot, e.g. `http://192.168.1.23:3000`. Open
 ## How to play
 
 1. One player presses **Create room**, the other joins with the 4-letter code, the link, or the QR code.
-2. Draw walls with the pen (mouse, touch or stylus). Place **Start ●** and **Goal ⚑**. The panel tells you live whether the maze is solvable; if not, the area Start can reach is tinted green so you can see the leak. Passages narrower than the player are rejected too.
+2. Draw walls with the pen (mouse, touch or stylus), or use **AI assist**: upload a photo of a maze, or let the AI clean up your doodle. Place **Start ●** and **Goal ⚑**. The panel tells you live whether the maze is solvable; if not, the area Start can reach is tinted green so you can see the leak. Passages narrower than the player are rejected too.
 3. **Submit**. The AI referee judges it and shows its theme card. Press **Ready**.
 4. When both are ready, mazes are swapped and a synced countdown starts.
-5. Race: **W/S** forward/back, **A/D** turn (arrow keys work), **Q/E** strafe, click for mouse look. Follow the glowing beacon. No minimap.
-6. **First to the goal wins.** Pace (ms per unit of shortest path) lets you compare runs on different mazes but does not decide the winner.
+5. Race: **W/S** forward/back, **A/D** turn (arrow keys work), **Q/E** strafe, **V** switch camera (first-person / third-person; overhead in solo), click for mouse look. Follow the glowing beacon. No minimap.
+6. **Beast mode (optional):** tick "Add a beast" while drawing and a shadow beast lives in your maze. It wakes 4 s after GO, hunts the racer through the corridors (pathfinding on the same grid as collision), and sends them back to the start if it catches them. The screen edges glow red and it growls as it gets close.
+7. **First to the goal wins.** Pace (ms per unit of shortest path) lets you compare runs on different mazes but does not decide the winner.
 
 The build timer (default 3 min) auto-submits a valid maze when it runs out; an invalid one gets 30 s of overtime and is then replaced with a bundled maze.
 
