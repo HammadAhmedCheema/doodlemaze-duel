@@ -4,7 +4,7 @@
 
 ![Race view](docs/race.png)
 
-Two players on the same Wi-Fi each doodle a maze freehand. Our geometry engine cleans the doodle into precise walls and proves it can be solved. An open-weight vision-language model (Qwen3-VL via OpenRouter) looks at the maze, rates its difficulty, writes a cheeky referee comment and picks a theme: materials, palette, lighting mood, fog and props. Three.js builds the themed 3D maze, the players swap, a synced 3-2-1 countdown starts, and the first one to find the glowing goal wins.
+Two players on the same Wi-Fi each doodle a maze freehand. Our geometry engine cleans the doodle into precise walls and proves it can be solved. An open-weight vision-language model (Google Gemma 3 27B via OpenRouter, with Qwen3-VL as fallback) looks at the maze, rates its difficulty, writes a cheeky referee comment and picks a theme: materials, palette, lighting mood, fog and props. Three.js builds the themed 3D maze, the players swap, a synced 3-2-1 countdown starts, and the first one to find the glowing goal wins.
 
 | Draw (live validation, cleaned walls, debug path) | AI referee theme card + 3D preview | Result with shortest paths |
 |---|---|---|
@@ -20,7 +20,7 @@ flowchart LR
   D -- no path --> E[Explain why + tint<br/>the reachable region]
   E --> A
   D -- solvable --> F[Server re-validates<br/>renders clean 600px PNG]
-  F --> G[Open-weight VLM<br/>Qwen3-VL via OpenRouter]
+  F --> G[Open-weight VLM<br/>Gemma 3 27B via OpenRouter]
   G -- strict JSON Theme --> H[zod field-by-field<br/>validation + contrast fix]
   G -. timeout / error / skip .-> I[Default theme]
   H --> J[Ready]
@@ -35,11 +35,11 @@ The same TypeScript geometry module (`shared/geometry`) runs in the browser (ins
 
 ## Open-weight AI
 
-- **Primary model:** `qwen/qwen3-vl-235b-a22b-instruct` (Qwen3-VL, open weights, Apache-2.0).
-- **Fallback:** `meta-llama/llama-4-scout` (Llama 4 Scout, open weights). OpenRouter's `models` array falls through automatically on rate limits or downtime.
+- **Primary model:** `google/gemma-3-27b-it` (Google Gemma 3 27B, open weights, multimodal).
+- **Fallback:** `qwen/qwen3-vl-235b-a22b-instruct` (Qwen3-VL, open weights, Apache-2.0). OpenRouter's `models` array falls through automatically on rate limits or downtime.
 - **Why a VLM:** it sees the maze the way a player would. It judges whether the picture is a real maze, rates difficulty, checks the drawing is safe to show, and designs a theme that fits the shape (a spiral can become "Frozen Catacombs", a garden of short walls an "Overgrown Garden").
 - **Why the VLM never produces geometry:** a model cannot place walls with the 1-unit precision collision needs, and a single hallucinated gap would make a maze unwinnable. Geometry comes only from deterministic code; the model returns data (a `Theme` JSON) that fixed code consumes.
-- **Structured output:** `response_format: json_schema` (strict), falling back to `json_object` if a provider rejects the schema. Every reply is re-validated with zod **field by field**: a bad field gets its default instead of discarding the whole answer. Palettes are corrected for wall/floor contrast so a bad colour choice can never make a maze unplayable.
+- **Structured output:** `json_object` mode with the expected shape spelled out in the prompt (Gemma), strict `json_schema` for models that support it, and plain text as a last resort. Every reply is re-validated with zod **field by field**: a bad field gets its default instead of discarding the whole answer. Palettes are corrected for wall/floor contrast so a bad colour choice can never make a maze unplayable.
 - **Fallback chain:** model → fallback model → one quick retry → default theme. The game always completes, even offline (`MOCK_VLM=1`) or when the player presses **Skip AI theme**.
 - **Cost control:** results cached by maze hash, one in-flight call per player, max 6 calls per room per minute, `max_tokens: 600`. A call costs well under a cent.
 

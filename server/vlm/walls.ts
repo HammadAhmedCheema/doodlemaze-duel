@@ -64,7 +64,8 @@ export function parseWalls(raw: unknown): Omit<WallsResult, 'model'> {
 export async function requestWalls(mode: WallMode, image: string, hint: string, cfg: { model: string; fallbacks: string[] }, outer?: AbortSignal): Promise<WallsResult> {
   const deadline = Date.now() + 55_000;
   let nudge = '';
-  for (let attempt = 0; attempt < 2; attempt++) {
+  let plainText = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
     const budget = deadline - Date.now();
     if (budget < 5000) break;
     const signals = [AbortSignal.timeout(Math.min(45_000, budget))];
@@ -80,16 +81,14 @@ export async function requestWalls(mode: WallMode, image: string, hint: string, 
         models: [cfg.model, ...cfg.fallbacks],
         temperature: attempt ? 0.4 : 0.1,
         max_tokens: 2500,
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: PROMPTS[mode] },
-          { role: 'user', content: [{ type: 'image_url', image_url: { url: image } }, { type: 'text', text: userText }] },
-        ],
+        ...(plainText ? {} : { response_format: { type: 'json_object' } }),
+        // instructions in the user turn: Gemma has no system role
+        messages: [{ role: 'user', content: [{ type: 'text', text: PROMPTS[mode] }, { type: 'image_url', image_url: { url: image } }, { type: 'text', text: userText }] }],
       }),
     });
     if (!res.ok) {
       const t = (await res.text()).slice(0, 300);
-      if (attempt === 0 && res.status !== 401 && res.status !== 402) { console.warn(`[vlm] ${mode}: ${res.status}, retrying: ${t}`); continue; }
+      if (attempt < 2 && res.status >= 400 && res.status < 500 && ![401, 402, 429].includes(res.status) && !plainText) { console.warn(`[vlm] ${mode}: ${res.status} with json_object, retrying without response_format: ${t}`); plainText = true; continue; }
       throw new Error(`OpenRouter ${res.status}: ${t}`);
     }
     const j = (await res.json()) as { model?: string; choices?: Array<{ message?: { content?: string | Array<{ text?: string }> } }>; usage?: { prompt_tokens?: number; completion_tokens?: number; cost?: number } };
@@ -101,6 +100,7 @@ export async function requestWalls(mode: WallMode, image: string, hint: string, 
     console.log(`[vlm] ${mode}: ${j.model} returned ${out.strokes.length} walls in ${Date.now() - t0} ms (tokens in ${u?.prompt_tokens ?? '?'}, out ${u?.completion_tokens ?? '?'}, cost $${u?.cost ?? '?'})`);
     if (out.strokes.length >= 3) return { ...out, model: j.model ?? cfg.model };
     console.warn(`[vlm] ${mode}: too few walls, raw reply was: ${text.slice(0, 300).replace(/\s+/g, ' ')}`);
+    if (nudge) break; // already nudged once
     nudge = 'Your previous answer listed no walls, but the picture clearly contains black wall lines. Trace every one of them.';
   }
   throw new Error('the model returned no usable walls');

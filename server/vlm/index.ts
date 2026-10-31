@@ -11,8 +11,8 @@ export type ThemeResult = { theme: Theme; source: ThemeSource; model?: string };
 
 export const vlmConfig = () => ({
   mock: process.env.MOCK_VLM === '1' || !process.env.OPENROUTER_API_KEY,
-  model: process.env.OPENROUTER_MODEL || 'qwen/qwen3-vl-235b-a22b-instruct',
-  fallbacks: (process.env.OPENROUTER_FALLBACK_MODELS || 'meta-llama/llama-4-scout').split(',').map((s) => s.trim()).filter(Boolean),
+  model: process.env.OPENROUTER_MODEL || 'google/gemma-3-27b-it',
+  fallbacks: (process.env.OPENROUTER_FALLBACK_MODELS || 'qwen/qwen3-vl-235b-a22b-instruct').split(',').map((s) => s.trim()).filter(Boolean),
 });
 
 const cache = new Map<string, ThemeResult>();

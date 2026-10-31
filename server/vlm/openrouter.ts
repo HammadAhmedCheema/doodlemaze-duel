@@ -69,10 +69,27 @@ async function post(body: object, signal: AbortSignal): Promise<Response> {
   });
 }
 
+/** The shape we want, spelled out for models where the JSON schema is not enforced (Gemma, json_object mode). */
+export const THEME_EXAMPLE =
+  'Fields: isMaze (bool), contentSafe (bool, false for offensive/sexual/hateful drawings), difficulty ("easy"|"medium"|"hard"), difficultyScore (integer 1-10), ' +
+  'themeName (2-4 words), wallMaterial (stone|brick|hedge|ice|neon|wood|metal|crystal), floorMaterial (stone|grass|sand|ice|tiles|metal|void), mood (day|dusk|night|neon), ' +
+  'palette {wall, floor, sky, accent} as "#rrggbb" with walls clearly different from the floor, fogDensity (0 to 0.05), props (up to 4 of torch|tree|crystal|pillar|mushroom|lantern|rock), ' +
+  'refereeComment (max 140 chars, playful, about THIS maze). Example: ' +
+  '{"isMaze":true,"contentSafe":true,"difficulty":"medium","difficultyScore":5,"themeName":"Frozen Catacombs","wallMaterial":"ice","floorMaterial":"stone","mood":"night",' +
+  '"palette":{"wall":"#9fd8ff","floor":"#1d2b44","sky":"#0b1426","accent":"#7df9ff"},"fogDensity":0.02,"props":["crystal","rock"],"refereeComment":"Three dead ends in a row? Cold."}';
+
+/** Gemma-family models on OpenRouter do not reliably support json_schema; start them on json_object. */
+export function formatLadder(model: string): object[] {
+  const schema = { type: 'json_schema', json_schema: { name: 'maze_theme', strict: true, schema: THEME_JSON_SCHEMA } };
+  const ladder: object[] = [{ type: 'json_object' }, { type: 'none' }];
+  return /gemma/i.test(model) ? ladder : [schema, ...ladder];
+}
+
 /**
  * Ask the open-weight VLM to judge and theme the maze.
- * json_schema first; on a 4xx that looks like a response_format problem, retry once with json_object.
- * One retry for fast transient failures; overall cap ~15 s. Output is always re-validated with zod.
+ * Instructions go in the user turn (Gemma has no system role). Response format steps down
+ * json_schema -> json_object -> none on 4xx. One retry for fast transient failures; overall cap ~15 s.
+ * Output is always re-validated with zod field by field.
  */
 export async function callOpenRouter(req: ThemeRequest, cfg: Cfg, outer?: AbortSignal): Promise<{ theme: Theme; model: string }> {
   const png = renderMazePng(req.segments, req.start, req.goal).toString('base64');
@@ -83,19 +100,19 @@ export async function callOpenRouter(req: ThemeRequest, cfg: Cfg, outer?: AbortS
     temperature: 0.4,
     max_tokens: 600,
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
       {
         role: 'user',
         content: [
+          { type: 'text', text: `${SYSTEM_PROMPT}\n${THEME_EXAMPLE}` },
           { type: 'image_url', image_url: { url: `data:image/png;base64,${png}` } },
-          { type: 'text', text: `Summary: ${JSON.stringify(summary)}` },
+          { type: 'text', text: `Summary: ${JSON.stringify(summary)}\nReply with the JSON object only.` },
         ],
       },
     ],
   };
   const deadline = Date.now() + 15_000;
-  let format: object = { type: 'json_schema', json_schema: { name: 'maze_theme', strict: true, schema: THEME_JSON_SCHEMA } };
-  let switchedFormat = false;
+  const ladder = formatLadder(cfg.model);
+  let step = 0;
   let retried = false;
 
   for (;;) {
@@ -105,13 +122,14 @@ export async function callOpenRouter(req: ThemeRequest, cfg: Cfg, outer?: AbortS
     const signals = [AbortSignal.timeout(budget)];
     if (outer) signals.push(outer);
     try {
-      const res = await post({ ...base, response_format: format }, AbortSignal.any(signals));
+      const fmt = ladder[step] as { type: string };
+      const body = fmt.type === 'none' ? base : { ...base, response_format: fmt };
+      const res = await post(body, AbortSignal.any(signals));
       if (!res.ok) {
         const errText = (await res.text()).slice(0, 300);
-        if (res.status >= 400 && res.status < 500 && res.status !== 429 && !switchedFormat) {
-          console.warn(`[vlm] ${res.status} with json_schema, retrying with json_object: ${errText}`);
-          switchedFormat = true;
-          format = { type: 'json_object' };
+        if (res.status >= 400 && res.status < 500 && ![401, 402, 429].includes(res.status) && step < ladder.length - 1) {
+          console.warn(`[vlm] ${res.status} with response_format ${fmt.type}, stepping down: ${errText}`);
+          step++;
           continue;
         }
         throw Object.assign(new Error(`OpenRouter ${res.status}: ${errText}`), { fast: Date.now() - t0 < 6000 });
@@ -119,7 +137,9 @@ export async function callOpenRouter(req: ThemeRequest, cfg: Cfg, outer?: AbortS
       const j = (await res.json()) as { model?: string; choices?: Array<{ message?: { content?: string | Array<{ text?: string }> } }>; usage?: unknown };
       const content = j.choices?.[0]?.message?.content;
       const text = Array.isArray(content) ? content.map((c) => c.text ?? '').join('') : content ?? '';
-      const theme = parseTheme(extractJson(text), req.stats.shortestUnits);
+      let raw: unknown;
+      try { raw = extractJson(text); } catch (e) { console.warn(`[vlm] theme reply had no JSON: ${text.slice(0, 200).replace(/\s+/g, ' ')}`); throw Object.assign(e as Error, { fast: true }); }
+      const theme = parseTheme(raw, req.stats.shortestUnits);
       console.log(`[vlm] ${j.model ?? cfg.model} -> "${theme.themeName}" (${theme.difficulty} ${theme.difficultyScore}/10) in ${Date.now() - t0} ms`, j.usage ? JSON.stringify(j.usage) : '');
       return { theme, model: j.model ?? cfg.model };
     } catch (e) {
